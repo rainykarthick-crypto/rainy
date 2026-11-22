@@ -983,7 +983,7 @@ class AIHawk(App[None]):
     async def change_key(self) -> None:
         config = self.session.config
         if config.key_from_environment():
-            self.say(f"The key comes from the {KEY_ENV} variable, which wins over one typed here.")
+            self.say(f"The key comes from the {config.key_env()} variable, which wins over one typed here.")
             return
         key = await self.take_key()
         if key:

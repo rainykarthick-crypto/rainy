@@ -7,7 +7,6 @@ here is a send from there. While the terminal app is open, applying is refused: 
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import sqlite3
 import subprocess
@@ -178,11 +177,11 @@ async def apply_batch(ids: list[str], skip_duplicates: bool, trial: bool = False
         log("batch finished")
 
 
-async def index(request):  # noqa: ARG001
+async def index(request):
     return HTMLResponse(PAGE)
 
 
-async def api_stats(request):  # noqa: ARG001
+async def api_stats(request):
     rows = query("select status, count(*) as n from jobs group by status")
     counts = {row["status"]: row["n"] for row in rows}
     scores = query(
@@ -228,7 +227,7 @@ async def api_jobs(request):
     return JSONResponse(rows)
 
 
-async def api_applications(request):  # noqa: ARG001
+async def api_applications(request):
     rows = query(
         "select company, title, location, status, reason, sent_at, final_url, substr(note,1,400) as note from jobs"
         " where status not in ('new','scored','passed_over') order by coalesce(sent_at, updated) desc limit 300"
@@ -395,12 +394,12 @@ async def api_apply(request):
     return JSONResponse({"started": len(ids)})
 
 
-async def api_stop(request):  # noqa: ARG001
+async def api_stop(request):
     STATE["stopping"] = True
     return JSONResponse({"stopping": True})
 
 
-async def api_refresh(request):  # noqa: ARG001
+async def api_refresh(request):
     if REFRESH["running"]:
         return JSONResponse({"error": "already fetching"}, status_code=409)
     if STATE["running"]:
@@ -409,7 +408,7 @@ async def api_refresh(request):  # noqa: ARG001
     return JSONResponse({"started": True})
 
 
-async def api_refresh_state(request):  # noqa: ARG001
+async def api_refresh_state(request):
     return JSONResponse(REFRESH)
 
 
@@ -422,7 +421,7 @@ def _meta(page: str, prop: str) -> str:
         rf'<meta[^>]+content=["\']([^"\']*)["\'][^>]*property=["\']{re.escape(prop)}["\']',
         rf'<meta[^>]+name=["\']{re.escape(prop)}["\'][^>]*content=["\']([^"\']*)',
     ):
-        found = re.search(pattern, page, re.I)
+        found = re.search(pattern, page, re.IGNORECASE)
         if found:
             return _strip_html(found.group(1))
     return ""
@@ -441,7 +440,7 @@ def jsonld_posting(page: str) -> dict[str, Any] | None:
     import json as jsonmodule
     import re
 
-    for match in re.finditer(r'<script[^>]+application/ld\+json[^>]*>(.*?)</script>', page, re.S | re.I):
+    for match in re.finditer(r'<script[^>]+application/ld\+json[^>]*>(.*?)</script>', page, re.DOTALL | re.IGNORECASE):
         try:
             data = jsonmodule.loads(match.group(1).strip())
         except ValueError:
@@ -505,7 +504,7 @@ async def api_add_job(request):
     if not title:
         import re
 
-        found = re.search(r"<title[^>]*>(.*?)</title>", page.text, re.S | re.I)
+        found = re.search(r"<title[^>]*>(.*?)</title>", page.text, re.DOTALL | re.IGNORECASE)
         title = _strip_html(found.group(1)) if found else ""
         if not title:
             return JSONResponse({"error": "that page names no job"}, status_code=422)
@@ -534,7 +533,7 @@ async def api_add_job(request):
         session.close()
 
 
-async def api_progress(request):  # noqa: ARG001
+async def api_progress(request):
     return JSONResponse(STATE)
 
 

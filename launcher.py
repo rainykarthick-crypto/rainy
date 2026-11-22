@@ -68,7 +68,6 @@ def run() -> None:
     import webbrowser
 
     import uvicorn
-
     from dashboard import app
 
     def open_browser_when_ready() -> None:
