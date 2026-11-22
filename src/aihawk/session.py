@@ -16,7 +16,7 @@ from openai import AsyncOpenAI
 from aihawk import errors
 from aihawk.apply import MAILBOXES, NOTE, BrowserDidNotOpen, Outcome, apply_to_job, no_browser_here, signed_in, site_of
 from aihawk.apply import sign_in as sign_in_browser
-from aihawk.config import DEFAULT_BASE_URL, KEY_ENV, Config, ConfigError, load_config
+from aihawk.config import Config, ConfigError, load_config
 from aihawk.database import load_manifest, search
 from aihawk.library import Library
 from aihawk.liveness import posting_is_closed
@@ -132,13 +132,13 @@ class Session:
         """The AI service refused the key. One typed in is forgotten, so the next question asks for another; one from the environment is named."""
         self._client = None
         if self.config.key_from_environment():
-            return f"The AI service refused the key in the {KEY_ENV} variable. Set a valid one there, then start AIHawk again."
+            return f"The AI service refused the key in the {self.config.key_env()} variable. Set a valid one there, then start AIHawk again."
         self.config.key_file.unlink(missing_ok=True)
         return "The AI service refused the key, so AIHawk forgot it. Paste a new one."
 
     def key_client(self, key: str) -> AsyncOpenAI:
         """A client for a key not yet kept, to try it: no retries, and no waiting long on a service that does not answer."""
-        return AsyncOpenAI(base_url=DEFAULT_BASE_URL, api_key=key, max_retries=0, timeout=15.0)
+        return AsyncOpenAI(base_url=self.config.base_url, api_key=key, max_retries=0, timeout=15.0)
 
     async def key_accepted(self, key: str) -> bool:
         """Whether the service takes this key: its list of models answers a key it does not know with 401 and nothing else is

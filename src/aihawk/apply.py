@@ -31,7 +31,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from openai import AsyncOpenAI
 
-from aihawk.config import DEFAULT_BASE_URL, DEFAULT_MODEL, DRY_RUN_ENV, KEY_ENV, dry_run
+from aihawk.config import CURRENT, DEFAULT_BASE_URL, DEFAULT_MODEL, DRY_RUN_ENV, dry_run, key_variables
 from aihawk.database import Job
 from aihawk.llm import SPEND, chat, not_answering, structured
 from aihawk.store import Proof, safe_name
@@ -80,13 +80,13 @@ WHY_NOT_SENT = {
     REFUSED_BY_FORM: "the form refused it",
     DRY_RUN: "it was a trial, nothing is sent",
     "other": "the form could not be filled",
-    "no_credit": "your OrcaRouter credit is finished: add credit at orcarouter.ai",
-    "free_calls_used": "the free calls for today are used up: add credit at orcarouter.ai",
-    "key_limit": "this key's own limit is used up: raise it at orcarouter.ai",
+    "no_credit": "your {provider} credit is finished: add credit at {site}",
+    "free_calls_used": "the free calls for today are used up: add credit at {site}",
+    "key_limit": "this key's own limit is used up: raise it at {site}",
     "spend_limit": "this key reached its spending limit for now",
-    "budget": "your OrcaRouter budget for this month is used up",
+    "budget": "your {provider} budget for this month is used up",
     "model_not_allowed": "this key is not allowed to use the models AIHawk needs",
-    "refused_other": "OrcaRouter refused this key for the request",
+    "refused_other": "{provider} refused this key for the request",
     "no_browser_here": "the browser has no version for this computer",
     "no_display": "the browser needs a desktop",
     "browser_libraries": "the browser needs a few system packages",
@@ -133,7 +133,7 @@ def why_not_sent(reason: str) -> str:
     if not reason:
         return ""
     if reason in WHY_NOT_SENT:
-        return WHY_NOT_SENT[reason]
+        return WHY_NOT_SENT[reason].format(provider=CURRENT["name"], site=CURRENT["site"])
     # The name of the error that stopped it: one of the AI service's, or any other.
     return "the AI service gave an error" if reason.endswith("Error") and hasattr(openai, reason) else "something went wrong"
 
@@ -157,6 +157,13 @@ LOOP_CYCLE, LOOP_WARN, LOOP_STOP = 5, 3, 5
 # after LOOP_CHECK_AFTER turns, every LOOP_CHECK_EVERY, it reads the last LOOP_CHECK_CALLS calls and the run stops when it
 # is sure, at LOOP_CHECK_SURE or more. On iCIMS a form went round a cycle of some 25 calls, filling, uploading and wiping.
 LOOP_CHECK_AFTER, LOOP_CHECK_EVERY, LOOP_CHECK_CALLS, LOOP_CHECK_SURE = 30, 10, 20, 0.9
+# Calls that change the page. A run of readings with none of these between them is a run going nowhere: it is what a form did
+# while the browser was still typing 600 characters, asked about the field again and again.
+ACTIONS = frozenset({
+    "browser_click", "browser_click_at", "browser_type", "browser_navigate", "browser_press_key",
+    "browser_select_option", "browser_upload_files", "browser_fill", "browser_scroll",
+})
+STALL_READS = 12
 LOOP_CHECK_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -216,6 +223,13 @@ You fill in one job application form in a browser, for the candidate, from the C
 - A required field they give you nothing for: a written one says "Please see my attached CV", in the form's language; a
   list or a yes or no takes the closest option; a number takes the most plausible one. Leave optional fields they do not
   answer empty.
+- A degree, qualification or field-of-study list with no exact match for the CV — a B.E. in Mechatronics Engineering is
+  often not among the options — takes the closest one: the level the CV names (Bachelor's Degree, B.E./B.Tech., Engineering,
+  else Other), with the CV's own wording in any field of study that accepts text. Never end a form because a list has no
+  exact entry, and never name a degree the CV does not show.
+- Keep a free-text answer to one short sentence, under 120 characters. Never paste the CV or a whole past job into a field.
+  The browser types every character as a key at a person's pace, about two a second, so 300 characters is three minutes of
+  typing and a run that waits on them goes nowhere.
 - That fallback never invents a fact about the candidate: a reference's name, a licence or certificate number, a
   qualification they do not claim. A required field that asks for one ends the form: call finish_form with status blocked
   and name that field. This is the one case where a required field is left for the person.
@@ -328,6 +342,22 @@ def instructions(guidance: str, page_rules: str = "") -> str:
     return f"{text}\n\nAbout this site. Where this differs from the rules above, the rules above win:\n\n{guidance}"
 
 
+# Gateways whose configured model reads text only: a picture in the request is refused whole, so they are sent the page's text.
+# DeepSeek is not one: its flash model reads images, and that is the model the settings name for forms.
+VISION_ENV = "AIHAWK_VISION"
+TEXT_ONLY_HOSTS: tuple[str, ...] = ()
+
+
+def sends_images(client: Any) -> bool:
+    """Whether this gateway's model reads screenshots. One on the list is sent the page's text instead. AIHAWK_VISION set turns
+    pictures on for any gateway; set to 0, it turns them off."""
+    forced = os.environ.get(VISION_ENV, "").strip()
+    if forced:
+        return forced.lower() not in ("0", "false", "no", "off")
+    host = urlsplit(str(getattr(client, "base_url", ""))).hostname or ""
+    return host not in TEXT_ONLY_HOSTS
+
+
 def _images(result: Any) -> list[dict[str, Any]]:
     """What a screenshot shows, as the model reads it. A tool's answer can only be text, so it goes in a message of its own."""
     return [
@@ -424,6 +454,7 @@ class _Watch:
         self.calls: list[_Call] = []
         self.idle = self.turns = self.visits = 0
         self.warned = self.in_mailbox = False
+        self.quiet = 0  # readings of the page in a row, with nothing clicked, typed or opened between them
         # Where a run that this watch stopped went round in circles, for the makers: see _stopped.
         self.stuck: dict[str, Any] | None = None
 
@@ -448,6 +479,7 @@ class _Watch:
     def saw(self, name: str, arguments: dict[str, Any], answer: str, pictures: str = "") -> None:
         mark = hashlib.sha256(json.dumps([name, arguments, answer + pictures], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         self.calls.append(_Call(name, mark, f"{name} {json.dumps(arguments, ensure_ascii=False)[:200]} -> {' '.join(answer.split())[:200]}"))
+        self.quiet = 0 if _tool_name(name) in ACTIONS else self.quiet + 1
 
     def _repeats(self, times: int) -> int:
         """The length of the cycle of calls the run ends with, repeated `times` in a row; 0 when there is none. Waiting in
@@ -467,6 +499,9 @@ class _Watch:
 
     async def after(self, client: AsyncOpenAI, model: str) -> tuple[str, str]:
         """At the end of a turn: why the run ends, and what the model is told; each "" when there is nothing."""
+        if self.quiet >= STALL_READS:
+            self._stopped("stalled")
+            return f"Stopped going round in circles: {self.quiet} readings of the page in a row, with nothing typed, clicked or opened.", ""
         if cycle := self._repeats(LOOP_STOP):
             self._stopped("repeat")
             calls = ", ".join(call.name for call in self.calls[-cycle:])
@@ -549,7 +584,7 @@ async def fill_form(session: Browser, tools: list[dict[str, Any]], client: Async
             if name == "browser_navigate" and watch.in_mailbox and not _is_mailbox(await _address_now(session)):
                 # The mailbox sent the browser to its sign-in page: that is the person's to do, once.
                 return _blocked(MAIL_NOT_SIGNED_IN, MAILBOX_SIGNED_OUT, watch.turns)
-            pictures = _images(result)
+            pictures = _images(result) if sends_images(client) else []
             seen += pictures
             messages.append({"role": "tool", "tool_call_id": call.id, "content": tool_text(result) or "Done: what it shows comes next."})
             watch.saw(name, arguments, tool_text(result), "".join(part["image_url"]["url"] for part in pictures))
@@ -838,14 +873,16 @@ async def _open_browser(session: Browser, profile: Path) -> None:
 def server_parameters(upload_dir: Path, home: Path) -> StdioServerParameters:
     # The browser is given the environment without the model's key: nothing it does needs that key.
     environment = {
-        **{name: value for name, value in os.environ.items() if name != KEY_ENV},
+        **{name: value for name, value in os.environ.items() if name not in key_variables()},
         "INVISIBLE_MCP_HOST_MANAGED": "1",
         "INVISIBLE_MCP_UPLOAD_DIRS": str(upload_dir),
         "INVISIBLE_MCP_HOME": str(home),
         # The person sees the window: what is done in their name happens in front of them.
         "STEALTHFOX_HEADLESS": "0",
     }
-    return StdioServerParameters(command=sys.executable, args=["-m", "invisible_playwright_mcp"], env=environment)
+    # Frozen into one executable there is no interpreter to run `-m` with: the same file starts the server when asked.
+    args = ["--invisible-mcp"] if getattr(sys, "frozen", False) else ["-m", "invisible_playwright_mcp"]
+    return StdioServerParameters(command=sys.executable, args=args, env=environment)
 
 
 @asynccontextmanager

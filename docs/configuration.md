@@ -23,6 +23,7 @@ What the forms are told about you beyond the CV (email, phone, location, links, 
 | Key | Default | What it does |
 |---|---|---|
 | `goals` | empty | What you are looking for, in your own words. Jev reads it. |
+| `base_url` | `https://api.orcarouter.ai/v1` | The OpenAI-compatible gateway AIHawk calls, or `AIHAWK_BASE_URL` in the environment. Any provider that speaks that API works, such as `https://api.deepseek.com/v1`. Its key is read from `AIHAWK_API_KEY`, the provider's own variable (`ORCAROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`), or the `key` file. The three models above must be ones that gateway serves. |
 | `database` | `https://huggingface.co/datasets/feder-cr/jobs/resolve/main/library/manifest.json` | Where the job database is: the URL of its `manifest.json`, or the path of a local one. AIHawk downloads into `data/library` the chunks the search's days need, the newest jobs first; after that, only what changed. |
 | `max_age_days` | `15` | How many days back a search looks; "Posted within (days)" in Settings. AIHawk downloads only the part of the database these days need, all of it before the first search. The database holds the last 30 days, so a larger number finds nothing more. A posting its source does not date is dated by the day the database first saw it. |
 | `model` | `deepseek/deepseek-v4.1-flash` | Fills the application forms. |

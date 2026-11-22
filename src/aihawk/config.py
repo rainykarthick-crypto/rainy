@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
+import base64
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import yaml
 
 CONFIG_FILE = "aihawk.yaml"
 KEY_FILE = "key"
+# A key kept on disk is sealed with Windows' own protection, which only this Windows user on this computer can open.
+KEY_SEALED = "dpapi:"
 DEFAULT_BASE_URL = "https://api.orcarouter.ai/v1"
+# Any OpenAI-compatible gateway may serve instead: `base_url` in aihawk.yaml, or AIHAWK_BASE_URL.
+BASE_URL_ENV = "AIHAWK_BASE_URL"
+# The key for the gateway named above, in the environment, whatever its provider.
+API_KEY_ENV = "AIHAWK_API_KEY"
 # The variable that holds the model key, unless the settings name another. The browser is given no variable that holds a key.
 KEY_ENV = "ORCAROUTER_API_KEY"
 # Where a person gets a key. A referral link, as the README says: AIHawk gets a share of what is spent through it.
@@ -36,6 +44,51 @@ DEFAULT_MAX_AGE_DAYS = 15
 
 class ConfigError(Exception):
     """aihawk.yaml or a file it needs says something that cannot be used."""
+
+
+# The gateways AIHawk knows by name, and the variable that holds the key of each in the environment.
+PROVIDERS = (
+    ("orcarouter", "OrcaRouter", "ORCAROUTER_API_KEY", "orcarouter.ai"),
+    ("deepseek", "DeepSeek", "DEEPSEEK_API_KEY", "deepseek.com"),
+    ("openai.com", "OpenAI", "OPENAI_API_KEY", "platform.openai.com"),
+    ("openrouter", "OpenRouter", "OPENROUTER_API_KEY", "openrouter.ai"),
+    ("anthropic", "Anthropic", "ANTHROPIC_API_KEY", "console.anthropic.com"),
+)
+
+
+def _provider(base_url: str) -> tuple[str, str, str]:
+    """The gateway's name, the variable its key is kept in, and where a key is made; the address's own words for one not known."""
+    host = (urlsplit(base_url).hostname or "").lower()
+    for fragment, name, variable, where in PROVIDERS:
+        if fragment in host:
+            return name, variable, where
+    return host or "the AI service", "AIHAWK_API_KEY", host
+
+
+def provider_name(base_url: str) -> str:
+    return _provider(base_url)[0]
+
+
+def provider_key_env(base_url: str) -> str:
+    return _provider(base_url)[1]
+
+
+def provider_site(base_url: str) -> str:
+    return _provider(base_url)[2]
+
+
+def key_variables() -> set[str]:
+    """Every variable a model key can be kept in: none of them is given to the browser."""
+    return {API_KEY_ENV, *(variable for _, _, variable, _ in PROVIDERS)}
+
+
+# The gateway this process talks to, set when the client is made: the words on the screen follow the settings, not the default.
+CURRENT = {"name": "OrcaRouter", "site": "orcarouter.ai"}
+
+
+def use_gateway(base_url: str) -> None:
+    name, _, site = _provider(base_url)
+    CURRENT["name"], CURRENT["site"] = name, site
 
 
 @dataclass(frozen=True)
@@ -89,6 +142,7 @@ class Filters:
 class Config:
     workspace: Path
     goals: str = ""
+    base_url: str = DEFAULT_BASE_URL
     database: str = DEFAULT_DATABASE
     max_age_days: int = DEFAULT_MAX_AGE_DAYS
     model: str = DEFAULT_MODEL
@@ -124,18 +178,51 @@ class Config:
 
     def api_key(self) -> str:
         """The model's key: from the environment, or the one the person typed in."""
-        from_environment = os.environ.get(KEY_ENV, "").strip()
-        if from_environment:
-            return from_environment
-        return self.key_file.read_text(encoding="utf-8-sig").strip() if self.key_file.is_file() else ""
+        for name in (API_KEY_ENV, provider_key_env(self.base_url)):
+            from_environment = os.environ.get(name, "").strip()
+            if from_environment:
+                return from_environment
+        return unseal_key(self.key_file.read_text(encoding="utf-8-sig").strip()) if self.key_file.is_file() else ""
+
+    def key_env(self) -> str:
+        """The variable this gateway's key is kept in: AIHAWK_API_KEY, or the provider's own name for it."""
+        return API_KEY_ENV if os.environ.get(API_KEY_ENV, "").strip() else provider_key_env(self.base_url)
 
     def key_from_environment(self) -> bool:
-        return bool(os.environ.get(KEY_ENV, "").strip())
+        return bool(os.environ.get(API_KEY_ENV, "").strip() or os.environ.get(provider_key_env(self.base_url), "").strip())
 
     def save_key(self, key: str) -> None:
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.key_file.touch(mode=0o600, exist_ok=True)
-        self.key_file.write_text(key.strip(), encoding="utf-8")
+        self.key_file.write_text(seal_key(key.strip()), encoding="utf-8")
+
+
+def seal_key(key: str) -> str:
+    """The key as it is written to disk: sealed with Windows' DPAPI, or as it stands where that is not available."""
+    try:
+        import win32crypt
+
+        sealed = win32crypt.CryptProtectData(key.encode("utf-8"), "Rainy model key", None, None, None, 0)
+        if isinstance(sealed, tuple):  # older pywin32 returned (blob, description)
+            sealed = sealed[0]
+        return KEY_SEALED + base64.b64encode(sealed).decode("ascii")
+    except Exception:  # noqa: BLE001  no Windows, no pywin32: the key is kept as it was
+        return key
+
+
+def unseal_key(stored: str) -> str:
+    """The key from its file: one sealed with DPAPI opened, a plain one (an older file) kept as it is."""
+    if not stored.startswith(KEY_SEALED):
+        return stored
+    try:
+        import win32crypt
+
+        opened = win32crypt.CryptUnprotectData(base64.b64decode(stored[len(KEY_SEALED):]), None, None, None, 0)
+        if isinstance(opened, tuple):  # older pywin32 returned (description, blob)
+            opened = opened[1]
+        return opened.decode("utf-8")
+    except Exception:  # noqa: BLE001  another Windows user's file, or a damaged one: no key
+        return ""
 
 
 def dry_run() -> bool:
@@ -249,6 +336,7 @@ def load_config(workspace: Path) -> Config:
     return Config(
         workspace=workspace,
         goals=str(raw.get("goals") or ""),
+        base_url=str(raw.get("base_url") or os.environ.get(BASE_URL_ENV, "") or DEFAULT_BASE_URL).rstrip("/"),
         database=DEFAULT_DATABASE if str(raw.get("database") or OLD_DATABASE) == OLD_DATABASE else str(raw["database"]),
         max_age_days=_days(raw.get("max_age_days", DEFAULT_MAX_AGE_DAYS), "max_age_days"),
         model=str(raw.get("model") or DEFAULT_MODEL),

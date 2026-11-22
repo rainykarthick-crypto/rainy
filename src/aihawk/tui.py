@@ -20,7 +20,7 @@ from textual.widgets import DataTable, Footer, Input, Static
 
 from aihawk import errors
 from aihawk.apply import MAILBOXES, Outcome, mail_provider, no_browser_here, why_not_sent
-from aihawk.config import KEY_ENV, KEY_URL, ConfigError
+from aihawk.config import CURRENT, KEY_URL, ConfigError
 from aihawk.database import DatabaseError
 from aihawk.library import LibraryError, Stopped
 from aihawk.llm import account_problem, error_name, explain, not_answering, refused
@@ -52,14 +52,30 @@ RESUME_PLACEHOLDER = "Drag your resume file into this window, or type where it i
 MAIL_QUESTION = "Some job sites email a code to confirm it is you. Which email do you apply with?"
 MAIL_CODE_QUESTION = "A site sent a code to your email. Which email is it, so AIHawk can read it?"
 MAIL_HINT = "AIHawk opens that inbox in its browser only to read those codes · Enter · Esc later"
-KEY_QUESTION = "Paste your OrcaRouter key"
-KEY_HINT = (
-    "AIHawk uses OrcaRouter, a paid AI service, to read your resume and fill the forms: a few cents per application.\n"
-    f"Get a key at {KEY_URL.removeprefix('https://www.')}\n"
-    "Ctrl+O opens it in your browser · It stays on this computer\n"
-    "Enter saves · Esc later"
-)
-KEY_REFUSED = "OrcaRouter did not accept that key. Check it and paste it again."
+def key_question() -> str:
+    return f"Paste your {CURRENT['name']} key"
+
+
+def key_site() -> str:
+    """Where a key is made: OrcaRouter's own link, which carries the referral, or the gateway's site."""
+    return KEY_URL if CURRENT["name"] == "OrcaRouter" else f"https://{CURRENT['site']}"
+
+
+def key_hint() -> str:
+    return (
+        f"AIHawk uses {CURRENT['name']}, a paid AI service, to read your resume and fill the forms: a few cents per application.\n"
+        f"Get a key at {key_site().removeprefix('https://www.').removeprefix('https://')}\n"
+        "Ctrl+O opens it in your browser · It stays on this computer\n"
+        "Enter saves · Esc later"
+    )
+
+
+def key_refused() -> str:
+    return f"{CURRENT['name']} did not accept that key. Check it and paste it again."
+
+
+def no_key() -> str:
+    return f"No key yet. Press e, then {CURRENT['name']} key."
 NO_CREDIT_QUESTION = (
     "This key works, but its OrcaRouter account has no credit yet. AIHawk needs a few dollars there to read your resume and the jobs: "
     "add them at orcarouter.ai."
@@ -69,10 +85,14 @@ NO_CREDIT_HINT = "Enter checks again · Ctrl+O opens orcarouter.ai · Esc goes o
 # Reading the resume refused as too many requests is told as OrcaRouter's free plan being too little, the owner's decision of
 # 2026-11-12: the person is told what to do about it, and the resume is read again on Enter. It can also come to an account
 # with credit when the service is busy; the question then still says where credit is added.
-FREE_PLAN_QUESTION = (
-    "OrcaRouter is limiting this account: its free plan is not enough for AIHawk. Add a few dollars at orcarouter.ai, then try again."
-)
-FREE_PLAN_HINT = "Enter tries again · Ctrl+O opens orcarouter.ai · Esc later"
+def free_plan_question() -> str:
+    if CURRENT["name"] == "OrcaRouter":
+        return "OrcaRouter is limiting this account: its free plan is not enough for AIHawk. Add a few dollars at orcarouter.ai, then try again."
+    return f"{CURRENT['name']} is limiting this account. Try again in a minute, or check its billing at {CURRENT['site']}."
+
+
+def free_plan_hint() -> str:
+    return f"Enter tries again · Ctrl+O opens {CURRENT['site']} · Esc later"
 # What to press after a failure at the resume, whose file is remembered.
 RESUME_REMEMBERED = "press r: your resume is remembered."
 MAIL_LATER = "Mail left for later: e, then Your mail."
@@ -80,7 +100,6 @@ MAIL_NAMES = {"gmail": "Gmail", "outlook": "Outlook"}
 RESUME_HINT = "PDF, .docx or text · Enter reads it · Esc later"
 MAIL_UNREADABLE = "Only Gmail and Outlook can be read for now; the rest works without."
 SENDING = "Applications are being sent: wait for them to finish."
-NO_KEY = "No key yet. Press e, then OrcaRouter key."
 NO_RESUME = "No resume yet. Press r and give the file."
 NO_JOBS = "No jobs found for these places and days. Press e to change them."
 # How long scoring waits after each request that got no answer, in seconds, before it asks again. After the last wait one more
@@ -128,6 +147,7 @@ class AIHawk(App[None]):
     BINDINGS: ClassVar = [
         # Space and Enter both select: the table's own Enter comes as RowSelected, below. i reads the job.
         Binding("space", "toggle", "Select"),
+        Binding("ctrl+a", "select_page", "Select page"),
         Binding("i", "details", "Details"),
         Binding("a", "apply", "Apply"),
         Binding("s", "sent", "Sent"),
@@ -392,7 +412,7 @@ class AIHawk(App[None]):
         resume again once the person has added credit, Esc leaves the line that says r does it."""
         telemetry = self.session.telemetry
         telemetry.step("free_plan_told")
-        again = await self.push_screen_wait(Confirm(FREE_PLAN_QUESTION, FREE_PLAN_HINT, link=KEY_URL))
+        again = await self.push_screen_wait(Confirm(free_plan_question(), free_plan_hint(), link=key_site()))
         telemetry.step("free_plan_retry" if again else "free_plan_later")
         return again
 
@@ -415,7 +435,7 @@ class AIHawk(App[None]):
         key = await self.take_key()
         if not key:
             telemetry.step("key_missing")
-            self.say(NO_KEY, again=True)
+            self.say(no_key(), again=True)
             self.waiting_for_key = True
             return False
         self.session.save_key(key)
@@ -451,7 +471,7 @@ class AIHawk(App[None]):
             self.say("Checking the key…", again=True)
             if await self.session.key_accepted(key):
                 return key
-            self.key_problem = KEY_REFUSED
+            self.key_problem = key_refused()
 
     async def read_resume(self) -> bool:
         """The resume given on the command line or asked for, until it is a file, and read; False when the person has none for now."""
@@ -493,7 +513,7 @@ class AIHawk(App[None]):
 
     async def key_prompt(self) -> str | None:
         problem, self.key_problem = self.key_problem, ""
-        return await self.push_screen_wait(TextPrompt(KEY_QUESTION, placeholder="sk-orca-...", password=True, hint=KEY_HINT, problem=problem, link=KEY_URL))
+        return await self.push_screen_wait(TextPrompt(key_question(), placeholder="sk-...", password=True, hint=key_hint(), problem=problem, link=key_site()))
 
     async def resume_prompt(self) -> Path | None:
         """The file the person names, as a path; None when they name none."""
@@ -762,6 +782,23 @@ class AIHawk(App[None]):
     def row_chosen(self) -> None:
         self.action_toggle()
 
+    def action_select_page(self) -> None:
+        """Every job on this page at once; pressed again with all of them selected, none of them."""
+        if not self.pages:
+            return
+        page = self.pages[self.page]
+        table = self.query_one(DataTable)
+        every = all(job_id in self.selected for job_id in page)
+        for job_id in page:
+            if every:
+                self.selected.discard(job_id)
+            else:
+                self.selected.add(job_id)
+            item = self.session.store.get(job_id)
+            if item is not None:
+                table.update_cell(job_id, "mark", self.row(item)[0])
+        self.show_count()
+
     def action_details(self) -> None:
         """The job under the cursor, as its posting says it."""
         item = self.current()
@@ -817,7 +854,7 @@ class AIHawk(App[None]):
             ("resume", "Resume", (self.session.resume_name() or "loaded") if config.cv.is_file() else "none yet"),
             ("answers", "Your answers", str(len(self.own_answers()))),
             ("mail", "Your mail", self.mail_words()),
-            ("key", "OrcaRouter key", "saved" if config.api_key() else "none yet"),
+            ("key", f"{CURRENT['name']} key", "saved" if config.api_key() else "none yet"),
             # The models are not here: a person does not choose one, and aihawk.yaml still changes them.
             ("folder", "Your files", str(config.workspace)),
         ]

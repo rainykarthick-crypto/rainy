@@ -17,7 +17,7 @@ from openai import (
     RateLimitError,
 )
 
-from aihawk.config import DEFAULT_BASE_URL, KEY_ENV, KEY_URL, Config, ConfigError
+from aihawk.config import CURRENT, Config, ConfigError, provider_site, use_gateway
 
 # The SDK's own default is ten minutes a try, and a model that hangs would hold a request that long.
 TIMEOUT = 180.0
@@ -238,28 +238,40 @@ def known(error: BaseException) -> bool:
     return isinstance(error, APIConnectionError | RateLimitError | InternalServerError | BadRequestError) or account_problem(error)
 
 
+def set_gateway(base_url: str) -> None:
+    """The gateway this process talks to, so the messages that name it follow the settings, not the default."""
+    use_gateway(base_url)
+
+
+def _at() -> str:
+    """Where an account is mended, when the gateway says: " at orcarouter.ai", or ""."""
+    return f" at {CURRENT['site']}" if CURRENT["site"] else ""
+
+
 def explain(error: Exception, step: str = "press → to go on.") -> str:
     """What a failed model call says in plain words and what to do about it; `step` is what to press once the account is mended,
     for the place the call failed in. The error's own text stays out, but for a refusal nothing explains: the key can be in it."""
     why = cause(error)
     if why == "no_credit":
-        return f"Your OrcaRouter account has no credit yet. Add a few dollars at orcarouter.ai, then {step}"
+        if CURRENT["name"] == "OrcaRouter":
+            return f"Your OrcaRouter account has no credit yet. Add a few dollars at orcarouter.ai, then {step}"
+        return f"Your {CURRENT['name']} account has no credit. Add credit{_at()}, then {step}"
     if why == "free_calls_used":
-        return f"The free calls for today are used up. Add credit at orcarouter.ai, then {step}"
+        return f"The free calls for today are used up. Add credit{_at()}, then {step}"
     after = f" Then {step}"
     if why == "key_limit":
-        return f"This key's own limit is used up. Raise it, or make a new key, at orcarouter.ai.{after}"
+        return f"This key's own limit is used up. Raise it, or make a new key,{_at()}.{after}"
     if why == "spend_limit":
-        return f"This key reached its spending limit for now. Raise it at orcarouter.ai, or wait until it resets.{after}"
+        return f"This key reached its spending limit for now. Raise it{_at()}, or wait until it resets.{after}"
     if why == "budget":
-        return f"Your OrcaRouter budget for this month is used up.{after}"
+        return f"Your {CURRENT['name']} budget for this month is used up.{after}"
     if why == "model_not_allowed":
-        return f"This key is not allowed to use the models AIHawk needs. Make a key with no model restriction at orcarouter.ai.{after}"
+        return f"This key is not allowed to use the models AIHawk needs. Make a key with no model restriction{_at()}.{after}"
     if why == "refused_other":
         said = refusal_in_words(error)
-        return f"OrcaRouter refused this key for the request{': ' + said.rstrip('.') if said else ''}.{after}"
+        return f"{CURRENT['name']} refused this key for the request{': ' + said.rstrip('.') if said else ''}.{after}"
     if account_problem(error):
-        return f"The AI service refused the request. Check your OrcaRouter account at orcarouter.ai, then {step}"
+        return f"The AI service refused the request. Check your {CURRENT['name']} account{_at()}, then {step}"
     if isinstance(error, APITimeoutError):
         return "The AI service did not answer in time. Try again in a moment."
     if isinstance(error, APIConnectionError):
@@ -276,19 +288,32 @@ def explain(error: Exception, step: str = "press → to go on.") -> str:
 def make_client(config: Config) -> AsyncOpenAI:
     key = config.api_key()
     if not key:
-        raise ConfigError(f"no model key: set {KEY_ENV} (create one at {KEY_URL})")
+        raise ConfigError(f"no model key: set {config.key_env()} (create one at {provider_site(config.base_url)})")
+    set_gateway(config.base_url)
     # The SDK retries 429s and 5xx itself and honours Retry-After, which is all OrcaRouter sends about its limits.
-    return AsyncOpenAI(base_url=DEFAULT_BASE_URL, api_key=key, max_retries=5, timeout=TIMEOUT)
+    return AsyncOpenAI(base_url=config.base_url, api_key=key, max_retries=5, timeout=TIMEOUT)
+
+
+# A gateway that refuses a strict JSON schema is told the schema in words and asked for json_object, from then on.
+NO_JSON_SCHEMA = [False]
 
 
 async def structured(client: AsyncOpenAI, model: str, system: str, user: str, name: str, schema: dict[str, Any]) -> dict[str, Any]:
     """One answer that follows `schema`. A reply that is not that JSON raises: nothing is guessed from it."""
-    response, request_id = await chat(
-        client,
-        model=model,
-        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-        response_format={"type": "json_schema", "json_schema": {"name": name, "strict": True, "schema": schema}},
-    )
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    if not NO_JSON_SCHEMA[0]:
+        try:
+            response, request_id = await chat(
+                client,
+                model=model,
+                messages=messages,
+                response_format={"type": "json_schema", "json_schema": {"name": name, "strict": True, "schema": schema}},
+            )
+        except BadRequestError:
+            NO_JSON_SCHEMA[0] = True
+    if NO_JSON_SCHEMA[0]:
+        messages[0]["content"] += f"\n\nReply with one JSON object only, and nothing else. It must follow this JSON Schema:\n{json.dumps(schema)}"
+        response, request_id = await chat(client, model=model, messages=messages, response_format={"type": "json_object"})
     SPEND.note(model, getattr(response, "usage", None), request_id)
     content = response.choices[0].message.content
     if not content:

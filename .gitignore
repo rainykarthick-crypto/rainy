@@ -12,3 +12,10 @@ build/
 aihawk.yaml
 cv.md
 answers.yaml
+
+# Builds of the packaged app: the exe and its folder are release assets, not source.
+build-*/
+dist-*/
+dist-ondir/
+release/
+*.spec

@@ -19,7 +19,7 @@ The steps after sign-in, shown in the progress bar: "My Information", "My Experi
 
 My Information: "How Did You Hear About Us?" is a list and "Have you previously worked for ..." a yes or no. Then the legal name (`legalNameSection_firstName`, `legalNameSection_lastName`), the address (`addressSection_addressLine1`, `addressSection_city`, `addressSection_postalCode`, with a region list on most countries) and the phone (`phone-device-type`, a country code list, `phone-number`).
 
-My Experience: work experience, education and skills are blocks added with "Add" buttons. Upload the CV with the file input in the "Resume/CV" section, `[data-automation-id="file-upload-input-ref"]` or the `input[type="file"]` there, and wait until the file name shows. Websites and social links are optional.
+My Experience: work experience, education and skills are blocks added with "Add" buttons. Upload the CV with the file input in the "Resume/CV" section, `[data-automation-id="file-upload-input-ref"]` or the `input[type="file"]` there, and wait until the file name shows. Websites and social links are optional. The Role Description of a work-experience block is one short sentence, under 120 characters, such as "NOC engineer for Cisco LAN/WAN and firewalls at an enterprise support provider.": the browser types every character at about two a second, so 300 characters is three minutes, and reading the field while it types is a run going nowhere.
 
 Application Questions: the company's own questions, mostly lists and yes or no, all usually required. Voluntary Disclosures and Self Identify: demographic questions with a "prefer not to say" or "I do not wish to answer" option, and a "Terms and Conditions" checkbox that is required.
 

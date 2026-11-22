@@ -211,7 +211,7 @@ def test_no_key_asks_for_one_and_keeps_it_on_this_computer(home: Path, resume: P
             assert companies(app)
 
     asyncio.run(run())
-    assert (home / "key").read_text(encoding="utf-8") == "sk-orca-typed"
+    assert load_config(home).api_key() == "sk-orca-typed"
 
 
 def fake_apply(app: AIHawk, outcomes: list[Outcome], calls: list[Any]) -> None:
@@ -2197,7 +2197,7 @@ def test_a_key_the_service_refuses_is_asked_for_again_with_why_in_the_question(h
             assert app.session.key_accepted.keys == ["sk-orca-wrong", "sk-orca-right"]  # type: ignore[attr-defined]
 
     asyncio.run(run())
-    assert (home / "key").read_text(encoding="utf-8") == "sk-orca-right"
+    assert load_config(home).api_key() == "sk-orca-right"
 
 
 @pytest.mark.parametrize(("error", "kept"), [(status_error(AuthenticationError, 401), False), (APIConnectionError(request=REQUEST), True), (status_error(InternalServerError, 503), True), (APITimeoutError(request=REQUEST), True)])
@@ -2279,7 +2279,7 @@ def test_a_key_changed_from_the_settings_is_checked_too_and_a_refused_one_is_ask
             await pilot.press("escape")
 
     asyncio.run(run())
-    assert (home / "key").read_text(encoding="utf-8") == "sk-orca-good"
+    assert load_config(home).api_key() == "sk-orca-good"
 
 
 def test_ctrl_c_copies_what_is_selected_and_stays_and_with_nothing_selected_it_leaves(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2861,7 +2861,7 @@ def test_a_403_keeps_the_key_and_a_401_forgets_it(home: Path, resume: Path, monk
             await pilot.press("escape")
 
     asyncio.run(run(refusal(403, "This token has no access to model x", "", PermissionDeniedError)))
-    assert (home / "key").read_text(encoding="utf-8") == "sk-orca-mine"
+    assert load_config(home).api_key() == "sk-orca-mine"
     asyncio.run(run(status_error(AuthenticationError, 401)))
     assert not (home / "key").exists()
 
@@ -3026,7 +3026,7 @@ def test_escape_on_the_credit_question_goes_on_with_the_resume_without_credit(ho
 
     asyncio.run(run())
     assert steps_of(tracked)[:5] == ["key_asked", "key_saved", "no_credit_asked", "no_credit_skipped", "resume_read"]
-    assert (home / "key").read_text(encoding="utf-8") == "sk-orca-new"
+    assert load_config(home).api_key() == "sk-orca-new"
 
 
 @pytest.mark.parametrize(
@@ -3081,7 +3081,7 @@ def test_a_key_changed_in_the_settings_is_asked_about_its_credit_too(home: Path,
             await pilot.press("escape")
 
     asyncio.run(run())
-    assert (home / "key").read_text(encoding="utf-8") == "sk-orca-new"
+    assert load_config(home).api_key() == "sk-orca-new"
     assert steps_of(tracked)[-2:] == ["no_credit_asked", "no_credit_skipped"]
 
 
