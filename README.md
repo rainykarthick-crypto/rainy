@@ -1,77 +1,104 @@
-<div align="center">
-<picture>
-  <source media="(max-width: 374px) and (prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/assets/banner-small-dark.gif">
-  <source media="(max-width: 374px)" srcset="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/assets/banner-small-light.gif">
-  <source media="(max-width: 1239px) and (prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/assets/banner-phone-dark.gif">
-  <source media="(max-width: 1239px)" srcset="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/assets/banner-phone-light.gif">
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/assets/banner-dark.gif">
-  <img alt="AIHawk. An animation: the app starts from a terminal and narrows 10 million job postings to the 25 that fit a resume; you pick three and say yes once; a Firefox window fills each form and submits it; the app shows them sent. An illustration, with invented companies and an invented person." src="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/assets/banner-light.gif" width="100%">
-</picture>
-<h3 align="center">An AI job application bot: automated job search, then it auto-applies to the jobs that match your resume, while you sleep.</h3>
+# Rainy
 
-<a href="https://decodo.com/deals/residential-offer?utm_medium=affiliate&utm_source=Federico+Elia&promoter_id=15854270&fpr=7859773"><img alt="Decodo residential proxies, free trial (sponsored)" src="https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/assets/decodo-residential-proxies-trial.png" width="560"></a><br>
-<sub>Sponsored</sub>
+A local job-search and application assistant for Windows.
 
-<sub>FEATURED IN</sub><br>
-<a href="https://www.businessinsider.com/aihawk-applies-jobs-for-you-linkedin-risks-inaccuracies-mistakes-2024-11"><b>Business Insider</b></a> ·
-<a href="https://techcrunch.com/2024/10/10/a-reporter-used-ai-to-apply-to-2843-jobs/"><b>TechCrunch</b></a> ·
-<a href="https://www.semafor.com/article/09/12/2024/linkedins-have-nots-and-have-bots"><b>Semafor</b></a> ·
-<a href="https://www.wired.it/article/aihawk-come-automatizzare-ricerca-lavoro/"><b>Wired</b></a> ·
-<a href="https://www.theverge.com/2024/10/10/24266898/ai-is-enabling-job-seekers-to-think-like-spammers"><b>The Verge</b></a> ·
-<a href="https://www.vanityfair.it/article/intelligenza-artificiale-candidature-di-lavoro"><b>Vanity Fair</b></a> ·
-<a href="https://www.404media.co/i-applied-to-2-843-roles-the-rise-of-ai-powered-job-application-bots/"><b>404 Media</b></a>
-</div>
+Rainy searches a published database of postings, scores them against your CV with an AI model, and fills the company's
+own application form in a real browser. Nothing is sent until you select the jobs and confirm the batch.
 
----
+Rainy is a **remake of [AIHawk](https://github.com/feder-cr/Jobs_Applier_AI_Agent)** (MIT). AIHawk did the hard part —
+the job database, the browser automation, the form-filling model. This fork adds a local dashboard, support for any
+OpenAI-compatible gateway, an encrypted key, and fixes for the places where the browser stalled.
+
+## Download
+
+| File | Size | Start | Notes |
+|---|---|---|---|
+| [`Rainy.exe`](https://github.com/rainykarthick-crypto/rainy/releases/latest/download/Rainy.exe) | 87 MB | ~20 s | one file, nothing else needed |
+| [`Rainy-1.0.0-win64.zip`](https://github.com/rainykarthick-crypto/rainy/releases/download/v1.0.0/Rainy-1.0.0-win64.zip) | 87 MB | ~9 s | extract, then run `Rainy\Rainy.exe` |
+
+Windows 10/11, x64. The binaries are unsigned, so SmartScreen warns once: **More info → Run anyway**.
+
+```powershell
+Rainy.exe              # dashboard, opens in your browser
+Rainy.exe --tui        # the terminal interface
+Rainy.exe --install    # copy to %LOCALAPPDATA%\Programs\Rainy and add shortcuts
+```
+
+## First run
+
+1. **Start Rainy.** The dashboard opens at `http://127.0.0.1:8765`.
+2. **Paste an API key.** It is checked against the gateway and then sealed with Windows DPAPI — only your Windows
+   account on this computer can read it.
+3. **Upload your CV.** The search plan — titles, places and their weights — is built from it.
+4. **Fill in your details** in the answers panel: salary, notice period, address, education, work history.
+5. **Fetch new jobs**, then select and apply.
+
+Tick **trial** before applying to fill every form and send nothing. That is the safe way to see what the model does on a
+site you have not applied to before.
+
+## What the dashboard does
+
+| | |
+|---|---|
+| **Jobs** | Every scored posting, filtered by score, status and text, with links to the real listing |
+| **Apply** | Select shown, apply in a batch, live progress, a log, and Stop between applications |
+| **Trial** | Fill every form, send none |
+| **Resume** | Upload a PDF, Word or text file; the search plan is rebuilt from it |
+| **Details** | Edit any answer the forms receive, add new ones, remove them |
+| **API key** | Validated before saving, encrypted at rest, never displayed |
+| **Chat** | Ask about your search; it answers with your live job and answer context |
+| **Add job** | Paste any company job link — read, scored and added to the list |
+| **Fetch new jobs** | Bring the database up to date, search, and score what is new |
 
 ## How it works
 
-Give it your resume. The job search finds the postings that fit, you pick, and it fills in and sends each job application on the company's own form.
+1. **Search.** A database of postings from 37 public sources, rebuilt by AIHawk's pipeline, is downloaded to your
+   computer and searched locally.
+2. **Score.** A model reads each posting against your CV and answers how sure it is that the job fits. That certainty is
+   the score, 1 to 5.
+3. **Fill.** A model drives a real Firefox on the employer's form, filling every required field from your CV and answers.
+4. **You send.** The application is submitted only after you select the jobs and confirm. Each outcome is recorded with
+   a screenshot of what the page said.
 
-| Step | What happens |
-|---|---|
-| **1. Reads your resume** | Turns it into a search: the titles, the skills and the places that fit you. |
-| **2. Searches** | Millions of postings of the last 30 days from 37 public sources, rebuilt every five hours, searched on your computer. |
-| **3. Scores** | Asks of every posting, against your resume, one question: is it in line with you? How sure the answer is makes the score, from 1 to 5. 50 jobs to a page, the next one ready while you read this one. |
-| **4. You pick** | Select the jobs you want and say yes once. |
-| **5. Applies** | First a quick check that the posting is still open, on the sites where that can be told without a browser. Then a real Firefox opens the company's form, fills every required field, attaches your CV and sends. |
-| **6. Keeps the answer** | What each page said, with a screenshot, for every application. |
+## Configuration
 
----
+Settings live in `%USERPROFILE%\.aihawk\aihawk.yaml`, changed with `e` in the terminal app or by editing the file. See
+[configuration](docs/configuration.md). The models and the gateway are here:
 
-## Install
+```yaml
+base_url: https://api.deepseek.com/v1   # any OpenAI-compatible gateway
+model: deepseek-flash                   # fills the forms (reads screenshots)
+quick_model: deepseek-flash             # short calls: the search plan
+decision_model: deepseek-flash          # scores the postings
+max_age_days: 30
+```
 
-Windows, in PowerShell:
+Answers, the CV and what was sent stay in `%USERPROFILE%\.aihawk` on your computer. The only things that leave it are
+what the model is asked: your CV, the answers, and the text of the pages it fills.
+
+## Known limits
+
+- Windows x64 only for the packaged builds; the engine has no Mac version
+- LinkedIn postings are excluded from the database by design — paste the company's own application link instead
+- A form that requires a profile photo cannot be completed; only the CV is uploaded
+- The browser engine (~740 MB) downloads once, on the first application
+- A captcha that is not a simple box stops the form, and you finish it by hand
+
+## Development
 
 ```powershell
-irm https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/run.ps1 | iex
+python -m venv .venv
+.venv\Scripts\pip install -e ".[dev]"
+.venv\Scripts\python -m pytest -m "not browser"    # unit tests
+.venv\Scripts\python dashboard.py                  # the dashboard from source
+.venv\Scripts\python -m PyInstaller --onedir ...   # see launcher.py
 ```
 
-Linux, and macOS (on a Mac AIHawk finds and scores the jobs, but cannot send applications yet: its browser has no Mac version):
+`launcher.py` is the entry point the packaged builds use: the dashboard by default, `--tui` for the terminal app,
+`--invisible-mcp` for the browser server it starts for itself.
 
-```bash
-curl -LsSf https://raw.githubusercontent.com/feder-cr/Jobs_Applier_AI_Agent/main/run.sh | sh
-```
+## Licence and credit
 
-You need a key: [get one from OrcaRouter](https://www.orcarouter.ai/ref/ref_accd17afb78fc95ac4d7). Signing up is free, and a new account starts with no credit: add a few dollars there before the first start, or AIHawk cannot read your resume. An application costs a few cents.
-
-The first start downloads about 250 MB and takes a minute or two; after that it opens in seconds, also without a connection. Nothing else needs installing first (on Linux, `curl`). The first application brings the browser, about 430 MB more, and opens it in a window: on Linux that needs a desktop.
-
-## Guides
-
-Written by the AIHawk team:
-
-- [How to auto-apply to jobs](https://autoapplytools.com/how-to-auto-apply-to-jobs/): what auto-apply tools do, and what to check before you let one send applications.
-- [How to apply for jobs, step by step](https://jobhuntlab.com/how-to-apply-for-jobs/): from reading a posting to following up.
-- [ATS-friendly resume template](https://atsresumeguide.com/ats-resume-template/): a plain resume layout that application systems read cleanly.
-- [How to write a cover letter](https://coverletterdesk.com/how-to-write-a-cover-letter/): structure, length and what to include.
-- [How to keep track of job applications](https://trackyourjobsearch.com/how-to-track-job-applications/): what to log for each application, so you know what was sent and when to follow up.
-
----
-
-[Sites](docs/sites.md) · [Configuration](docs/configuration.md) · [Writing a plugin](docs/plugins.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=feder-cr/Jobs_Applier_AI_Agent&type=Date&theme=dark">
-  <img alt="Star history of AIHawk" src="https://api.star-history.com/svg?repos=feder-cr/Jobs_Applier_AI_Agent&type=Date" width="100%">
-</picture>
+MIT, as AIHawk was. The original copyright notices are kept in [LICENSE](LICENSE) and [NOTICE](NOTICE); this fork's
+changes are described in the commit history. Issue reports about the job database or the browser engine belong upstream
+at [feder-cr/Jobs_Applier_AI_Agent](https://github.com/feder-cr/Jobs_Applier_AI_Agent).
