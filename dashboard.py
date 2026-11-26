@@ -261,22 +261,42 @@ async def api_key(request):
     if request.method == "POST":
         from openai import AsyncOpenAI
 
+        from aihawk.profile import save_setting
+
         body = await request.json()
         value = str(body.get("key") or "").strip()
         if not value:
             return JSONResponse({"error": "the key is empty"}, status_code=400)
+        # The gateway can be changed here too: a new computer starts on the default one, and a key bought elsewhere is
+        # refused by it, which reads as "that key is wrong" when the address is what is wrong.
+        gateway = str(body.get("base_url") or "").strip().rstrip("/")
+        if gateway and gateway != config.base_url:
+            if not gateway.startswith(("http://", "https://")):
+                return JSONResponse({"error": "the gateway must start with http"}, status_code=400)
+            save_setting(config, "base_url", gateway)
+            config = load_config(default_home())
         client = AsyncOpenAI(base_url=config.base_url, api_key=value, max_retries=0, timeout=20)
         try:
             await client.get("/models", cast_to=dict)
         except Exception as error:  # noqa: BLE001  an answer that is not a refusal leaves the key to be tried in real use
             if type(error).__name__ in ("AuthenticationError", "PermissionDeniedError"):
-                return JSONResponse({"error": "the service refused that key"}, status_code=400)
+                return JSONResponse({
+                    "error": f"{config.base_url} refused that key. A key from another provider is refused: check the "
+                             "gateway above matches the key.",
+                }, status_code=400)
         try:
             config.save_key(value)
         except OSError as error:
             return JSONResponse({"error": f"could not save: {error}"}, status_code=500)
         return JSONResponse({"saved": True, **key_state(), "base_url": config.base_url})
-    return JSONResponse({**key_state(), "base_url": config.base_url, "key_env": config.key_env()})
+    return JSONResponse({
+        **key_state(), "base_url": config.base_url, "key_env": config.key_env(),
+        "known": [
+            {"name": "DeepSeek", "url": "https://api.deepseek.com/v1"},
+            {"name": "OrcaRouter", "url": "https://api.orcarouter.ai/v1"},
+            {"name": "OpenAI", "url": "https://api.openai.com/v1"},
+        ],
+    })
 
 
 async def api_resume(request):
@@ -675,7 +695,11 @@ PAGE = """<!doctype html>
       <h2>API key</h2>
       <div id="keystate" class="muted">loading…</div>
       <div style="display:flex; gap:6px; margin-top:8px">
-        <input id="keyinput" type="password" placeholder="paste a key to replace it" style="flex:1">
+        <input id="gateway" list="gateways" placeholder="gateway address, e.g. https://api.deepseek.com/v1" style="flex:1">
+        <datalist id="gateways"></datalist>
+      </div>
+      <div style="display:flex; gap:6px; margin-top:6px">
+        <input id="keyinput" type="password" placeholder="paste the key for that gateway" style="flex:1">
         <button id="keysave">Save</button>
       </div>
     </div>
@@ -757,7 +781,11 @@ async function loadKey(){
   const k = await (await fetch('/api/key')).json();
   $('keystate').textContent = k.configured
     ? `saved — ${k.sealed ? 'encrypted for this Windows user' : 'kept as plain text'} · ${k.base_url}`
-    : `no key yet — ${k.base_url}; paste one below or set ${k.key_env}`;
+    : `no key yet; the gateway below must match the key you paste`;
+  if (k.base_url && !$('gateway').value) $('gateway').value = k.base_url;
+  if (k.known && !$('gateways').children.length) {
+    $('gateways').innerHTML = k.known.map(g => `<option value="${g.url}">${g.name}</option>`).join('');
+  }
 }
 
 $('keysave').onclick = async () => {
@@ -766,7 +794,9 @@ $('keysave').onclick = async () => {
   const button = $('keysave');
   button.disabled = true; button.textContent = 'Checking…';
   try {
-    const r = await fetch('/api/key', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({key})});
+    const gateway = $('gateway').value.trim();
+    const r = await fetch('/api/key', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({key, base_url: gateway})});
     const d = await r.json();
     if (!r.ok) { alert(d.error || 'could not save that key'); return; }
     $('keyinput').value = '';
