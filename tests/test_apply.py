@@ -1047,22 +1047,25 @@ def test_the_history_changes_once_per_batch_and_never_under_the_latest_readings_
 
 def test_small_answers_the_brief_and_the_rules_are_never_cut(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(apply_module, "TRIM_READINGS", True)
-    held = apply_module.READINGS_WHOLE + apply_module.READINGS_BATCH
-    steps = [step for _ in range(held + 2) for step in (read_page(), click_somewhere())]
+    pairs = apply_module.KEEP_WHOLE // 2 + 2
+    steps = [step for _ in range(pairs) for step in (read_page(), click_somewhere())]
     model = fill_with_readings(steps)
     first, last = model.seen[0], model.seen[-1]
     assert last[0] == first[0] and last[1] == first[1] and last[1]["content"] == "the brief"
     answers = tool_answers(last)
-    # Eight readings: the batch cut five at the seventh, the latest three are whole. Every click's answer is as it was.
-    assert answers.count("ok") == held + 2
-    assert sum(apply_module.EARLIER_READING in answer for answer in answers) == held + 1 - apply_module.READINGS_WHOLE
-    assert sum(len(answer) > 4000 for answer in answers) == 3
+    # Every click's short answer is as it was; of the readings, only those in the last few steps stay whole.
+    assert answers.count("ok") == pairs
+    kept = apply_module.KEEP_WHOLE // 2
+    assert sum(len(answer) > 4000 for answer in answers) == kept
+    assert sum("cut short" in answer for answer in answers) == pairs - kept
 
 
-def test_the_cut_is_off_and_no_reading_is_changed() -> None:
+def test_the_older_readings_are_one_line_and_the_latest_stay_whole() -> None:
     assert apply_module.TRIM_READINGS is False
     model = fill_with_readings([read_page()] * 12)
-    assert all(len(answer) > 4000 and apply_module.EARLIER_READING not in answer for answer in tool_answers(model.seen[-1]))
+    answers = tool_answers(model.seen[-1])
+    assert sum(len(answer) > 4000 for answer in answers) == apply_module.KEEP_WHOLE
+    assert all("cut short" in answer for answer in answers[: -apply_module.KEEP_WHOLE])
 
 
 class HoldsBack(ScriptedBrowser):

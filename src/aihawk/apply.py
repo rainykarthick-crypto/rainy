@@ -451,6 +451,23 @@ READING_HEAD = 400
 EARLIER_READING = "\n[An earlier reading, cut to its start to keep this conversation short. Read the page again if you need it.]"
 
 
+# How many tool answers stay whole. Every earlier one is cut to its first line: the model still reads what it did and what
+# came back, without the whole page being sent again on each of the forty steps that follow. The latest answers — the field
+# it is filling now — are never touched.
+KEEP_WHOLE = 6
+ONE_LINE_CHARS = 160
+
+
+def compact(messages: list[Any], keep: int = KEEP_WHOLE) -> None:
+    """The older tool answers cut to one line each, the last `keep` left as they are."""
+    tools = [message for message in messages if message.get("role") == "tool"]
+    for message in tools[:-keep] if keep else tools:
+        content = message.get("content") or ""
+        if len(content) > ONE_LINE_CHARS:
+            first = " ".join(content.split())[:ONE_LINE_CHARS]
+            message["content"] = f"{first} … [earlier step, cut short]"
+
+
 def _trim_readings(messages: list[Any]) -> None:
     """The older large page readings cut to their start, once enough of them are whole; the latest ones and every small answer stay."""
     if not TRIM_READINGS:
@@ -634,6 +651,7 @@ async def fill_form(session: Browser, tools: list[dict[str, Any]], client: Async
             messages.append({"role": "tool", "tool_call_id": call.id, "content": answer or "Done: what it shows comes next."})
             watch.saw(name, arguments, answer, "".join(part["image_url"]["url"] for part in pictures))
         _trim_readings(messages)
+        compact(messages)
         why, warning = await watch.after(client, model)
         if why:
             return _blocked(why, STUCK, watch.turns, watch.stuck)
