@@ -731,8 +731,8 @@ async def api_update(request):
         # Nothing was swapped and nothing is at risk: the new file stays beside the old one, and the person runs it.
         return JSONResponse({
             "downloaded": str(fresh),
-            "note": "Rainy could not restart itself here. Close Rainy, then run the downloaded file once; it replaces the "
-                    "installed copy and starts the new version.",
+            "note": "Rainy could not restart itself here. Close Rainy, then run the downloaded file with --install once: "
+                    "it replaces the installed copy and the shortcuts point at the new one.",
         })
     threading.Timer(1.0, os._exit, args=(0,)).start()
     return JSONResponse({"updating": True, "latest": release["latest"]})
