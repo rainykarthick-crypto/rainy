@@ -13,11 +13,12 @@ from pathlib import Path
 
 from openai import AsyncOpenAI
 
+from aihawk import apply as apply_module
 from aihawk import errors
 from aihawk.apply import MAILBOXES, NOTE, BrowserDidNotOpen, Outcome, apply_to_job, no_browser_here, signed_in, site_of
 from aihawk.apply import sign_in as sign_in_browser
 from aihawk.config import Config, ConfigError, load_config
-from aihawk.database import load_manifest, search
+from aihawk.database import Job, load_manifest, search
 from aihawk.library import Library
 from aihawk.liveness import posting_is_closed
 from aihawk.llm import ACCOUNT_CAUSES, SPEND, Mark, cause, make_client, no_credit, not_answering, refused
@@ -47,6 +48,8 @@ class Session:
     def __init__(self, workspace: Path) -> None:
         self.workspace = workspace
         self.config = load_config(workspace)
+        # How much one tool answer may add to a conversation, this run: the settings choose it, Economy to Quality.
+        apply_module.TOOL_TEXT_CHARS = self.config.tool_text_chars
         self.plugins: tuple[Plugin, ...] = load_plugins(workspace)
         self.store = Store(self.config.store_file)
         self.telemetry = Telemetry(self.config.data_dir)
@@ -238,7 +241,7 @@ class Session:
             self.store.set_description(item.job.id, text)
         jobs = [replace(item.job, description=text) for item, text in zip(batch, texts, strict=True)]
         cv = self.config.cv.read_text(encoding="utf-8-sig")
-        asked = question(self.config.goals, _places(self.config))
+        asked = question(self.config.goals, _places(self.config), self.config.filters.experience)
         reasons: list[str] = []
         try:
             values = await fits(self.client, self.config.decision_model, cv, jobs, asked, reasons.append)
@@ -268,12 +271,49 @@ class Session:
         name = self.config.data_dir / "cvs" / CV_NAME_FILE
         return name.read_text(encoding="utf-8").strip() if name.is_file() else ""
 
+    async def _resume_for(self, job: Job, cv: str, log: Log) -> tuple[Path, str]:
+        """The CV this application sends: rewritten for the posting where that helps, the person's own file where it does
+        not. A rewrite that fails sends the CV as it is — it must never stop an application."""
+        own = self._own_cv()
+        if self.config.tailor_resume == "off":
+            return own, cv
+        from aihawk.resume import cache_path, render_pdf, slug_of, tailored_for
+
+        posting = f"{job.title} at {job.company}. {job.location}\n\n{job.description}"
+        folder = self.config.data_dir / "tailored"
+        try:
+            rewritten, reason = await tailored_for(
+                self.client, self.config.quick_model, cv, posting, job.id, folder, self.config.tailor_resume)
+        except Exception as error:  # noqa: BLE001  the CV as it is, is better than no application
+            log(f"the CV stays as it is: the rewrite failed ({type(error).__name__})")
+            return own, cv
+        if not rewritten:
+            if reason:
+                log(f"the CV goes as it is: {reason}")
+            return own, cv
+        out = folder / slug_of(job.id) / own.name
+        try:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            render_pdf(rewritten, out, title=own.stem)
+        except Exception as error:  # noqa: BLE001
+            log(f"the CV stays as it is: the rewritten one would not render ({type(error).__name__})")
+            cache_path(folder, job.id).unlink(missing_ok=True)
+            return own, cv
+        log(f"the CV is rewritten for this posting: {reason or 'closer to what it asks for'}")
+        return out, rewritten
+
     def _own_cv(self) -> Path:
-        """The person's CV as they gave it, which goes with every form."""
-        kept = sorted((self.config.data_dir / "cvs").glob("original-cv.*"))
-        if not kept:
+        """The person's CV as they gave it, under their own file's name, which is what the employer receives."""
+        folder = self.config.data_dir / "cvs"
+        if name := self.resume_name():
+            kept = folder / name
+            if kept.is_file():
+                return kept
+        # A store made before the file kept its name.
+        older = sorted(folder.glob("original-cv.*"))
+        if not older:
             raise ConfigError("your CV file is not kept: load your resume again")
-        return kept[0]
+        return older[0]
 
     async def send(
         self, items: list[Stored], log: Log, begin: Callable[[int, int, Stored], None], done: Callable[[Stored, Outcome], None],
@@ -320,7 +360,7 @@ class Session:
         self.browsers += 1
         try:
             await self.engine_coming(note)
-            cv_file = self._own_cv()
+            cv_file, cv = await self._resume_for(job, cv, log)
             outcome = await apply_to_job(
                 self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile,
                 guidance, account, self.store.site_fields(host) or self._same_kind(host))

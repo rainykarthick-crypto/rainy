@@ -56,11 +56,14 @@ class NotAnswering(Exception):
     """A round's request got no answer, so its postings were left to be read again."""
 
 
-def question(goals: str, places: str) -> str:
-    """The one question, asked of every posting: in or out."""
+def question(goals: str, places: str, experience: str = "") -> str:
+    """The one question, asked of every posting: in or out. `experience` is the years the person has, which a posting that
+    asks for many more of is not in line with."""
+    levels = f" They have {experience} of experience, so a posting asking for much more than that is not in line." if experience else ""
     return (
         f"The candidate is looking for this: {goals} This job is in line with it: the same kind of work at their level, "
         f"their CV shows what the posting requires, and it is based in or near {places}, or remote and open to people living there."
+        f"{levels}"
     )
 
 

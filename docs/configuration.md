@@ -29,9 +29,12 @@ What the forms are told about you beyond the CV (email, phone, location, links, 
 | `model` | `deepseek/deepseek-v4.1-flash` | Fills the application forms. |
 | `quick_model` | `google/gemini-3.5-flash` | Writes the search plan from your CV, and the other short calls of a search. |
 | `decision_model` | `typesafe/jev-1.14` | Jev, which answers for each posting whether it is in line with you; how sure it is makes the score, from 1 to 5. |
+| `tailor_resume` | `auto` | Whether the CV is written for each posting: `auto` rewrites it where the model judges that helps and sends it as it is otherwise, `always` rewrites every time, `off` never. A rewritten CV is a PDF kept in `data/tailored`, under your own file's name; every fact in it comes from the CV. |
+| `tool_text_chars` | `8000` | How many characters one tool answer may add to a conversation. Lower spends fewer tokens per application and reads less of each page: "Page answers" in the dashboard, 3000 to 20000. |
 | `filters.include` | empty | Title words to search for. With no `plan`, each word is one title. AIHawk asks for a resume until there is a CV and at least one of these. Reading a resume writes this and `plan`, and the Settings screen does not offer them: a different search comes from a different resume. |
 | `filters.exclude` | empty | Whole words: a posting whose title has one of them is left out. |
 | `filters.locations` | empty | Places a posting's location must name, as whole words. |
 | `filters.countries` | empty | Countries. A posting in one of them passes. With `locations`, a posting that names one of those places passes only if its country is empty or one of these. |
 | `filters.cities` | empty | Cities. A posting whose location names one ranks higher; others are not left out. |
+| `filters.experience` | empty | The years you have, in words the scoring reads: `fresher`, `0-2 years`, `2-5 years`, `5-10 years`, `10+ years`. A posting asking for much more than that is not in line and scores lower; empty weighs nothing. "Experience" in the dashboard. |
 | `filters.plan` | empty | The title plan, with `nodes` and `arcs`. Each node has an `id`, a `weight` and `forms`, the wordings with their weights; a node of weight 0 only conditions the arcs. Each arc has `when` or `unless` (a node or a phrase in the title) and `then`, a list of `target` and `multiplier`; the target `*` is the whole title. Empty: the plan is `filters.include`. |

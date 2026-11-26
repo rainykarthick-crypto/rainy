@@ -175,16 +175,17 @@ async def install_resume(client: AsyncOpenAI, config: Config, path: Path, store:
     profile = await structured(client, config.quick_model, PROFILE_SYSTEM, cv, "search_profile", PROFILE_SCHEMA)
     config.workspace.mkdir(parents=True, exist_ok=True)
     config.cv.write_text(cv, encoding="utf-8")
-    # The file as the person gave it: the CV every application sends.
+    # The file as the person gave it, under the name it has: the employer receives "Karthick_Raja.pdf", not a copy called
+    # original-cv. The old name is still read for a store made before this, and removed once the new copy is in place.
     kept = config.data_dir / "cvs"
     kept.mkdir(parents=True, exist_ok=True)
-    for old in kept.glob("original-cv.*"):
-        # The file being installed can be the stored one already: deleting it first would delete its own source.
+    name = Path(path.name)
+    stored = kept / name.name
+    for old in (*kept.glob("original-cv.*"), stored):
         if old.resolve() != path.resolve():
-            old.unlink()
-    shutil.copyfile(path, kept / f"original-cv{path.suffix.lower()}")
-    # What the person called it, which the settings say: the copy above has a name of its own.
-    (kept / CV_NAME_FILE).write_text(path.name, encoding="utf-8")
+            old.unlink(missing_ok=True)
+    shutil.copyfile(path, stored)
+    (kept / CV_NAME_FILE).write_text(name.name, encoding="utf-8")
 
     settings_path = config.workspace / CONFIG_FILE
     settings = (yaml.safe_load(settings_path.read_text(encoding="utf-8-sig")) or {}) if settings_path.is_file() else {}
@@ -216,6 +217,8 @@ def save_setting(config: Config, name: str, value: str) -> None:
         filters.update({"locations": words, "cities": words, "countries": []})
     elif name == "exclude":
         filters["exclude"] = words
+    elif name == "experience":
+        filters["experience"] = value.strip()
     elif value.strip():
         settings[name] = int(value) if name == "max_age_days" and value.strip().isdigit() else value.strip()
     else:

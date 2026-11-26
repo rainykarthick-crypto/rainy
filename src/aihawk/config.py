@@ -130,6 +130,8 @@ class Filters:
     locations: tuple[str, ...] = ()
     cities: tuple[str, ...] = ()
     countries: tuple[str, ...] = ()
+    # The years the person has, as words the scoring reads: "fresher", "0-2 years", "5+ years". Empty counts as no limit.
+    experience: str = ""
     plan: Plan = field(default_factory=Plan)
 
     def titles(self) -> str:
@@ -148,6 +150,10 @@ class Config:
     model: str = DEFAULT_MODEL
     quick_model: str = DEFAULT_QUICK_MODEL
     decision_model: str = DEFAULT_DECISION_MODEL
+    # off: the CV goes as it is. auto: rewritten per posting when that helps, which the model judges. always: every time.
+    tailor_resume: str = "auto"
+    # What one tool answer may add to the conversation: the smaller, the fewer tokens an application spends.
+    tool_text_chars: int = 8000
     filters: Filters = field(default_factory=Filters)
 
     @property
@@ -254,6 +260,14 @@ def _items(value: object, name: str) -> list[Any]:
     return value
 
 
+def _chars(value: object) -> int:
+    """How many characters a tool answer may add: at least a page's worth, whatever the settings say."""
+    try:
+        return max(1000, int(value))
+    except (TypeError, ValueError):
+        return 8000
+
+
 def _days(value: object, name: str) -> int:
     try:
         return int(value)
@@ -346,12 +360,15 @@ def load_config(workspace: Path) -> Config:
         model=str(raw.get("model") or DEFAULT_MODEL),
         quick_model=str(raw.get("quick_model") or DEFAULT_QUICK_MODEL),
         decision_model=str(raw.get("decision_model") or DEFAULT_DECISION_MODEL),
+        tailor_resume=str(raw.get("tailor_resume") or "auto").strip().lower(),
+        tool_text_chars=_chars(raw.get("tool_text_chars", 8000)),
         filters=Filters(
             _words(filters.get("include"), "filters.include"),
             _words(filters.get("exclude"), "filters.exclude"),
             _words(filters.get("locations"), "filters.locations"),
             _words(filters.get("cities"), "filters.cities"),
             _words(filters.get("countries"), "filters.countries"),
+            str(filters.get("experience") or "").strip(),
             _plan(filters.get("plan")),
         ),
     )

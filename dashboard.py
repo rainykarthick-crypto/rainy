@@ -254,6 +254,25 @@ def key_state() -> dict[str, Any]:
     return {"configured": bool(raw), "sealed": raw.startswith("dpapi:")}
 
 
+async def api_settings(request):
+    """How much a page may add to a conversation, and whether the CV is written for each posting."""
+    from aihawk.config import load_config
+    from aihawk.profile import save_setting
+
+    config = load_config(default_home())
+    if request.method == "POST":
+        body = await request.json()
+        for name in ("tool_text_chars", "tailor_resume", "experience"):
+            if name in body:
+                save_setting(config, name, str(body[name] or ""))
+                config = load_config(default_home())
+    return JSONResponse({
+        "tool_text_chars": config.tool_text_chars,
+        "tailor_resume": config.tailor_resume,
+        "experience": config.filters.experience,
+    })
+
+
 async def api_key(request):
     from aihawk.config import load_config
 
@@ -756,6 +775,7 @@ app = Starlette(routes=[
     Route("/api/refresh-state", api_refresh_state),
     Route("/api/add-job", api_add_job, methods=["POST"]),
     Route("/api/key", api_key, methods=["GET", "POST"]),
+    Route("/api/settings", api_settings, methods=["GET", "POST"]),
     Route("/api/progress", api_progress),
     Route("/api/version", api_version),
     Route("/api/update", api_update, methods=["POST"]),
@@ -895,6 +915,36 @@ PAGE = """<!doctype html>
       <div style="display:flex; gap:6px; margin-top:8px">
         <input id="chatinput" placeholder="ask anything…" style="flex:1">
         <button id="chatsend">Send</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Cost and CV</h2>
+      <div style="display:flex; gap:6px; align-items:center">
+        <span class="muted" style="flex:1" title="How much of a page one tool answer may add to the conversation">Page answers</span>
+        <select id="quality">
+          <option value="3000">Economy</option>
+          <option value="8000">Balanced</option>
+          <option value="20000">Quality</option>
+        </select>
+      </div>
+      <div style="display:flex; gap:6px; align-items:center; margin-top:6px">
+        <span class="muted" style="flex:1" title="Whether the CV is rewritten for each posting">CV per posting</span>
+        <select id="tailor">
+          <option value="auto">Auto</option>
+          <option value="always">Always</option>
+          <option value="off">Same CV</option>
+        </select>
+      </div>
+      <div style="display:flex; gap:6px; align-items:center; margin-top:6px">
+        <span class="muted" style="flex:1" title="The years you have; postings asking for much more score lower">Experience</span>
+        <select id="experience">
+          <option value="">any</option>
+          <option value="fresher">fresher</option>
+          <option value="0-2 years">0-2 years</option>
+          <option value="2-5 years">2-5 years</option>
+          <option value="5-10 years">5-10 years</option>
+          <option value="10+ years">10+ years</option>
+        </select>
       </div>
     </div>
     <div class="panel">
@@ -1053,6 +1103,28 @@ $('addanswer').onclick = () => {
   saveAnswer(name, value).then(() => { $('newanswer').value = ''; $('newvalue').value = ''; });
 };
 
+function showSettings(s){
+  $('quality').value = String(s.tool_text_chars);
+  $('tailor').value = s.tailor_resume;
+  $('experience').value = s.experience || '';
+}
+
+async function loadSettings(){
+  showSettings(await (await fetch('/api/settings')).json());
+}
+
+async function saveSettings(patch){
+  const r = await fetch('/api/settings', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(patch)});
+  if (!r.ok) { alert('could not save that setting'); return; }
+  showSettings(await r.json());
+  loadStats(); loadJobs();
+}
+
+$('quality').onchange = () => saveSettings({tool_text_chars: $('quality').value});
+$('tailor').onchange = () => saveSettings({tailor_resume: $('tailor').value});
+$('experience').onchange = () => saveSettings({experience: $('experience').value});
+
 async function loadVersion(){
   const v = await (await fetch('/api/version')).json();
   $('version').textContent = v.latest
@@ -1165,7 +1237,7 @@ async function poll(){
   else { loadStats(); loadJobs(); }
 }
 
-loadStats(); loadJobs(); loadAnswers(); loadKey(); loadResume(); loadChat(); loadVersion(); loadProgress(); loadRefresh();
+loadStats(); loadJobs(); loadAnswers(); loadKey(); loadResume(); loadChat(); loadSettings(); loadVersion(); loadProgress(); loadRefresh();
 setInterval(() => {
   loadProgress().then(r => { if (r) { loadStats(); } });
   loadRefresh();
