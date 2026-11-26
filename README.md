@@ -20,8 +20,8 @@ OpenAI-compatible model, encrypts the API key, and fixes the places where the br
 
 | File | Size | Start | Get it |
 |---|---|---|---|
-| **Rainy.exe** | 87 MB | ~20 s | [single file, nothing else needed](https://github.com/rainykarthick-crypto/rainy/releases/latest/download/Rainy.exe) |
-| **Rainy-1.0.0-win64.zip** | 87 MB | ~9 s | [extract, run `Rainy\Rainy.exe`](https://github.com/rainykarthick-crypto/rainy/releases/download/v1.0.0/Rainy-1.0.0-win64.zip) |
+| **Rainy.exe** | 98 MB | ~20 s | [single file, nothing else needed](https://github.com/rainykarthick-crypto/rainy/releases/latest/download/Rainy.exe) |
+| **Rainy-1.0.1-win64.zip** | 98 MB | ~9 s | [extract, run `Rainy\Rainy.exe`](https://github.com/rainykarthick-crypto/rainy/releases/download/v1.0.1/Rainy-1.0.1-win64.zip) |
 
 Windows 10/11, x64. Unsigned, so SmartScreen warns once: **More info → Run anyway**.
 
