@@ -323,7 +323,7 @@ class Session:
             cv_file = self._own_cv()
             outcome = await apply_to_job(
                 self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile,
-                guidance, account, self.store.site_fields(host))
+                guidance, account, self.store.site_fields(host) or self._same_kind(host))
         except Exception as error:
             # One job's failure is reported and recorded; the next job still runs.
             if refused(error):
@@ -377,11 +377,22 @@ class Session:
         if outcome.form_map:
             # This host's form as it was filled, so the next run there starts from the fields instead of reading the page.
             self.store.set_site_fields(host, outcome.form_map, outcome.submit)
+            vendor = vendor_of(host)
+            if vendor != "other":
+                # The same vendor's sites share a layout (a Workday tenant is one host per company), so the newest map also
+                # helps the next company's form. A hint only: a field that is not there is read as before.
+                self.store.set_site_fields(f"kind:{vendor}", outcome.form_map, outcome.submit)
         if outcome.made_account and (email := self.store.answers().get("email")):
             # Written whatever the form did: the account exists on that site either way, and the next form there signs in.
             self.store.set_account(host, email)
         self.store.set_status(item.job.id, outcome.status, outcome.summary, outcome.reason)
         self.store.set_proof(item.job.id, outcome.proof)
+
+
+    def _same_kind(self, host: str) -> tuple[str, str] | None:
+        """What another site of the same vendor's form looked like; None for a vendor whose sites share no layout."""
+        vendor = vendor_of(host)
+        return self.store.site_fields(f"kind:{vendor}") if vendor != "other" else None
 
 
 def _why_failed(error: Exception) -> str:

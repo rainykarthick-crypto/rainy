@@ -69,8 +69,9 @@ The header shows `account: .rainy-kavipriya` so you can tell them apart at a gla
 | **Editable answers** | Every detail the forms receive, changed in place, used by the next application |
 | **Encrypted key** | Validated before saving, sealed with DPAPI, never displayed |
 | **Chat** | Ask about your search; it answers from your live jobs and answers |
-| **Add by link** | Paste a company job URL — read, scored, added to the list |
+| **Add by link** | Paste a job URL — read, scored, added to the list. A portal that blocks a plain request is opened in the real browser instead |
 | **Fetch new jobs** | Sync the database, search again, score what is new |
+| **Updates** | The Version panel checks GitHub and installs the newest release, restarting Rainy with the same account and port |
 
 ## How it works
 

@@ -485,6 +485,47 @@ def jsonld_posting(page: str) -> dict[str, Any] | None:
     return None
 
 
+def job_fields(page: str, url: str) -> tuple[str, str, str, str]:
+    """Title, company, place and description from a posting's page: its schema.org data first, its meta tags after."""
+    posting = jsonld_posting(page) or {}
+    title = str(posting.get("title") or "").strip() or _meta(page, "og:title")
+    for prefix in ("Job Application for ", "Apply - ", "Careers - "):
+        if title.lower().startswith(prefix.lower()):
+            title = title[len(prefix):]
+    organisation = posting.get("hiringOrganization") or {}
+    name = organisation.get("name") if isinstance(organisation, dict) else organisation
+    company = str(name or "").strip()
+    place = posting.get("jobLocation") or {}
+    if isinstance(place, list):
+        place = place[0] if place else {}
+    address = place.get("address") if isinstance(place, dict) else {}
+    if isinstance(address, dict):
+        location = ", ".join(str(address.get(key)) for key in ("addressLocality", "addressRegion", "addressCountry") if address.get(key))
+    else:
+        location = str(address or "")
+    description = _strip_html(str(posting.get("description") or "")) or _meta(page, "og:description")
+    return title, company, location, description
+
+
+async def read_in_browser(url: str) -> tuple[str, str]:
+    """The page as the real browser reads it, and the address it ended on: for the portals that refuse a plain request, or
+    draw the posting with script. The second half says a link that led somewhere else — a login page, a home page."""
+    from aihawk.apply import _open_browser, _server, tool_text
+    from aihawk.config import load_config
+
+    config = load_config(default_home())
+    async with _server(config.data_dir / "cvs", config.data_dir / "browser") as (session, _rules):
+        try:
+            await _open_browser(session, config.browser_profile)
+            await session.call_tool("browser_navigate", {"url": url, "wait_until": "networkidle"})
+            await asyncio.sleep(3)
+            html = tool_text(await session.call_tool("browser_read_html", {"mode": "full"}))
+            address = tool_text(await session.call_tool("browser_evaluate", {"expression": "location.href"}))
+            return html, address.strip('"')
+        finally:
+            await session.call_tool("browser_close", {})
+
+
 async def api_add_job(request):
     """One job by its link: read from the page, added to the store and scored, so it can be applied to like any other."""
     import httpx
@@ -501,45 +542,50 @@ async def api_add_job(request):
             "error": "LinkedIn postings are left out on purpose: applying there needs a LinkedIn session and breaks their "
                      "terms. Open the posting, choose 'Apply on company site', and paste that link instead.",
         }, status_code=400)
+
+    # A plain request first, which is quick. The portals that block one, or draw the posting with script, are read by the
+    # browser instead: that is what the browser is for, and it is the difference between "not working" and a job added.
+    page, note = "", ""
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=30, headers={
             "User-Agent": "Mozilla/5.0 (compatible; AIHawk dashboard)",
         }) as client:
-            page = await client.get(url)
-    except Exception as error:  # noqa: BLE001  said on the page
-        return JSONResponse({"error": f"could not open that link: {type(error).__name__}"}, status_code=502)
-    if page.status_code >= 400:
-        return JSONResponse({"error": f"the page answered HTTP {page.status_code}"}, status_code=502)
+            answer = await client.get(url)
+        if answer.status_code < 400:
+            page = answer.text
+        else:
+            note = f"the site answered HTTP {answer.status_code}"
+    except Exception as error:  # noqa: BLE001  the browser gets the next try
+        note = f"a plain request failed ({type(error).__name__})"
 
-    posting = jsonld_posting(page.text) or {}
-    title = str(posting.get("title") or "").strip()
+    title, company, location, description = job_fields(page, url)
+    landed = url
     if not title:
-        title = _meta(page.text, "og:title")
-    for prefix in ("Job Application for ", "Apply - ", "Careers - "):
-        if title.lower().startswith(prefix.lower()):
-            title = title[len(prefix):]
-    organisation = posting.get("hiringOrganization") or {}
-    name = organisation.get("name") if isinstance(organisation, dict) else organisation
-    company = str(name or "").strip()
-    place = posting.get("jobLocation") or {}
-    if isinstance(place, list):
-        place = place[0] if place else {}
-    address = place.get("address") if isinstance(place, dict) else {}
-    if isinstance(address, dict):
-        location = ", ".join(str(address.get(key)) for key in ("addressLocality", "addressRegion", "addressCountry") if address.get(key))
-    else:
-        location = str(address or "")
-    description = _strip_html(str(posting.get("description") or "")) or _meta(page.text, "og:description")
+        if browser_busy():
+            return JSONResponse({"error": "the browser is busy; try again in a moment"}, status_code=409)
+        try:
+            page, landed = await read_in_browser(url)
+        except Exception as error:  # noqa: BLE001  said on the page
+            return JSONResponse({
+                "error": f"could not open that page in the browser ({type(error).__name__}). "
+                         "Paste the employer's own application link.",
+            }, status_code=502)
+        title, company, location, description = job_fields(page or "", url)
 
     if not title:
         import re
 
-        found = re.search(r"<title[^>]*>(.*?)</title>", page.text, re.DOTALL | re.IGNORECASE)
+        found = re.search(r"<title[^>]*>(.*?)</title>", page, re.DOTALL | re.IGNORECASE)
         title = _strip_html(found.group(1)) if found else ""
-        if not title:
-            return JSONResponse({"error": "that page names no job"}, status_code=422)
+    if not title:
+        why = f" ({note})" if note else ""
+        if landed and landed.rstrip("/") != url.rstrip("/"):
+            why += f" The link opened {landed.rstrip('/')}, not the posting"
+        return JSONResponse({
+            "error": f"that page names no job{why}. Paste the employer's own application link.",
+        }, status_code=422)
     if not company:
-        company = _meta(page.text, "og:site_name")
+        company = _meta(page, "og:site_name")
     if not company:
         parts = url.split("//")[-1].split("/")
         company = parts[1] if len(parts) > 1 and parts[1] else parts[0]
@@ -563,6 +609,105 @@ async def api_add_job(request):
         session.close()
 
 
+RELEASE_REPO = "rainykarthick-crypto/rainy"
+
+
+def version_tuple(text: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in str(text).lstrip("vV").split(".") if part.isdigit())
+
+
+async def latest_release() -> dict[str, Any]:
+    """The newest release on GitHub: its tag, its page, its notes, and the one-file build's download address."""
+    import httpx
+
+    async with httpx.AsyncClient(timeout=20, headers={"Accept": "application/vnd.github+json"}) as client:
+        answer = await client.get(f"https://api.github.com/repos/{RELEASE_REPO}/releases/latest")
+    answer.raise_for_status()
+    data = answer.json()
+    info: dict[str, Any] = {
+        "latest": str(data.get("tag_name") or "").lstrip("vV"),
+        "url": data.get("html_url") or "",
+        "notes": str(data.get("body") or "")[:1200],
+        "asset": "",
+        "size": 0,
+    }
+    for asset in data.get("assets") or []:
+        if asset.get("name") == "Rainy.exe":
+            info["asset"] = asset.get("browser_download_url") or ""
+            info["size"] = int(asset.get("size") or 0)
+    return info
+
+
+async def api_version(request):
+    from aihawk import __version__
+
+    answer: dict[str, Any] = {"current": __version__, "frozen": bool(getattr(sys, "frozen", False))}
+    try:
+        release = await latest_release()
+    except Exception as error:  # noqa: BLE001  no connection, or the API refused: said, not raised
+        return JSONResponse({**answer, "error": f"{type(error).__name__}"})
+    answer.update(release)
+    answer["newer"] = bool(release["latest"]) and version_tuple(release["latest"]) > version_tuple(__version__)
+    return JSONResponse(answer)
+
+
+async def api_update(request):
+    """The newest Rainy.exe fetched beside this one, then a small script swaps it in and starts it again."""
+    if not getattr(sys, "frozen", False):
+        return JSONResponse({"error": "this copy runs from source; updates replace the installed program"}, status_code=400)
+    import subprocess
+    import threading
+
+    import httpx
+
+    try:
+        release = await latest_release()
+    except Exception as error:  # noqa: BLE001
+        return JSONResponse({"error": f"could not reach GitHub: {type(error).__name__}"}, status_code=502)
+    if not release["asset"]:
+        return JSONResponse({"error": "the newest release has no Rainy.exe"}, status_code=502)
+
+    exe = Path(sys.executable)
+    fresh = exe.with_name("Rainy.new.exe")
+    try:
+        async with httpx.AsyncClient(timeout=None, follow_redirects=True) as client, client.stream("GET", release["asset"]) as answer:
+            answer.raise_for_status()
+            with fresh.open("wb") as out:
+                async for chunk in answer.aiter_bytes(1 << 20):
+                    out.write(chunk)
+    except Exception as error:  # noqa: BLE001
+        fresh.unlink(missing_ok=True)
+        return JSONResponse({"error": f"could not download the update: {type(error).__name__}"}, status_code=502)
+    if release["size"] and fresh.stat().st_size != release["size"]:
+        size = fresh.stat().st_size
+        fresh.unlink(missing_ok=True)
+        return JSONResponse({"error": f"the download was {size:,} bytes, not {release['size']:,}"}, status_code=502)
+
+    # The running program cannot replace itself on Windows: a small script waits for it to exit, swaps, and starts it with
+    # the same account and port it was started with.
+    arguments = ""
+    if os.environ.get("AIHAWK_HOME"):
+        arguments += f' --home "{os.environ["AIHAWK_HOME"]}"'
+    if os.environ.get("AIHAWK_PORT"):
+        arguments += f' --port {os.environ["AIHAWK_PORT"]}'
+    script = exe.with_name("update.cmd")
+    script.write_text(
+        "@echo off\r\n"
+        "timeout /t 3 /nobreak >nul\r\n"
+        ":again\r\n"
+        f'move /y "{fresh}" "{exe}" >nul 2>&1\r\n'
+        "if errorlevel 1 (timeout /t 2 /nobreak >nul & goto again)\r\n"
+        f'start "" "{exe}"{arguments}\r\n',
+        encoding="utf-8",
+    )
+    await asyncio.to_thread(
+        subprocess.Popen, ["cmd", "/c", str(script)],
+        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+    )
+    threading.Timer(2.0, os._exit, args=(0,)).start()
+    return JSONResponse({"updating": True, "latest": release["latest"]})
+
+
 async def api_progress(request):
     return JSONResponse(STATE)
 
@@ -582,6 +727,8 @@ app = Starlette(routes=[
     Route("/api/add-job", api_add_job, methods=["POST"]),
     Route("/api/key", api_key, methods=["GET", "POST"]),
     Route("/api/progress", api_progress),
+    Route("/api/version", api_version),
+    Route("/api/update", api_update, methods=["POST"]),
 ])
 
 
@@ -718,6 +865,14 @@ PAGE = """<!doctype html>
       <div style="display:flex; gap:6px; margin-top:8px">
         <input id="chatinput" placeholder="ask anything…" style="flex:1">
         <button id="chatsend">Send</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Version</h2>
+      <div id="version" class="muted">…</div>
+      <div style="display:flex; gap:6px; margin-top:8px">
+        <button id="checkupdate">Check for updates</button>
+        <button id="doupdate" style="display:none">Update and restart</button>
       </div>
     </div>
   </div>
@@ -868,6 +1023,29 @@ $('addanswer').onclick = () => {
   saveAnswer(name, value).then(() => { $('newanswer').value = ''; $('newvalue').value = ''; });
 };
 
+async function loadVersion(){
+  const v = await (await fetch('/api/version')).json();
+  $('version').textContent = v.latest
+    ? `Rainy ${v.current} — newest on GitHub: ${v.latest}` + (v.newer ? ' (an update is available)' : ' (up to date)')
+    : `Rainy ${v.current}` + (v.error ? ` — could not ask GitHub: ${v.error}` : '');
+  $('doupdate').style.display = (v.newer && v.frozen) ? '' : 'none';
+}
+
+$('checkupdate').onclick = loadVersion;
+$('doupdate').onclick = async () => {
+  if (!confirm('Download the newest release and restart Rainy?')) return;
+  const button = $('doupdate');
+  button.disabled = true; button.textContent = 'Downloading…';
+  const r = await fetch('/api/update', {method: 'POST'});
+  const d = await r.json();
+  if (!r.ok) {
+    alert(d.error || 'the update did not start');
+    button.disabled = false; button.textContent = 'Update and restart';
+    return;
+  }
+  $('version').textContent = `Updating to ${d.latest} — Rainy restarts by itself. Reload this page in a few seconds.`;
+};
+
 async function loadChat(){
   const rows = await (await fetch('/api/chat')).json();
   $('chat').innerHTML = (rows || []).map(m =>
@@ -951,7 +1129,7 @@ async function poll(){
   else { loadStats(); loadJobs(); }
 }
 
-loadStats(); loadJobs(); loadAnswers(); loadKey(); loadResume(); loadChat(); loadProgress(); loadRefresh();
+loadStats(); loadJobs(); loadAnswers(); loadKey(); loadResume(); loadChat(); loadVersion(); loadProgress(); loadRefresh();
 setInterval(() => {
   loadProgress().then(r => { if (r) { loadStats(); } });
   loadRefresh();
