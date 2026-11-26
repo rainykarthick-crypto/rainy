@@ -63,6 +63,17 @@ CREATE TABLE IF NOT EXISTS answers (
 )
 """
 
+# The fields a site's form held when a run filled it, kept as a compact map: the next run on that host starts from them
+# instead of reading the whole page again, which is most of what a run costs in tokens.
+SITES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS sites (
+    host TEXT PRIMARY KEY,
+    fields TEXT NOT NULL,
+    submit TEXT NOT NULL DEFAULT '',
+    updated TEXT NOT NULL
+)
+"""
+
 # new -> scored -> refused | blocked | failed | submitted | unconfirmed, or new -> passed_over when Jev gave no answer.
 # shortlisted is a status an older store may still hold, for a job waiting to be scored: see JEV_ONLY.
 SUBMITTED = ("submitted", "unconfirmed")
@@ -170,6 +181,7 @@ class Store:
         self._db.execute(SCHEMA)
         self._db.execute(ANSWERS_SCHEMA)
         self._db.execute(ACCOUNTS_SCHEMA)
+        self._db.execute(SITES_SCHEMA)
         # A store from before the cost was kept gets the column; the rows keep their nulls.
         columns = {row[1] for row in self._db.execute("PRAGMA table_info(jobs)")}
         if "cost" not in columns:
@@ -312,6 +324,20 @@ class Store:
         self._db.execute(
             "INSERT INTO accounts (host, email, made_at) VALUES (?, ?, ?) ON CONFLICT(host) DO UPDATE SET email = excluded.email",
             (host.lower(), email, _now()),
+        )
+        self._db.commit()
+
+    # The form a site showed: the fields and their selectors, kept so the next run on that host does not read the page anew.
+    def site_fields(self, host: str) -> tuple[str, str] | None:
+        """The stored map of this host's form and the send control last found on it; None where none was kept."""
+        row = self._db.execute("SELECT fields, submit FROM sites WHERE host = ?", (host.lower(),)).fetchone()
+        return (row["fields"], row["submit"]) if row else None
+
+    def set_site_fields(self, host: str, fields: str, submit: str = "") -> None:
+        self._db.execute(
+            "INSERT INTO sites (host, fields, submit, updated) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(host) DO UPDATE SET fields = excluded.fields, submit = excluded.submit, updated = excluded.updated",
+            (host.lower(), fields, submit, _now()),
         )
         self._db.commit()
 

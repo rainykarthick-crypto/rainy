@@ -322,7 +322,8 @@ class Session:
             await self.engine_coming(note)
             cv_file = self._own_cv()
             outcome = await apply_to_job(
-                self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile, guidance, account)
+                self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile,
+                guidance, account, self.store.site_fields(host))
         except Exception as error:
             # One job's failure is reported and recorded; the next job still runs.
             if refused(error):
@@ -373,6 +374,9 @@ class Session:
 
     def _keep(self, item: Stored, host: str, outcome: Outcome) -> None:
         """What came of the application, kept with the job: its account, status and proof."""
+        if outcome.form_map:
+            # This host's form as it was filled, so the next run there starts from the fields instead of reading the page.
+            self.store.set_site_fields(host, outcome.form_map, outcome.submit)
         if outcome.made_account and (email := self.store.answers().get("email")):
             # Written whatever the form did: the account exists on that site either way, and the next form there signs in.
             self.store.set_account(host, email)

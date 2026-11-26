@@ -79,7 +79,10 @@ The header shows `account: .rainy-kavipriya` so you can tell them apart at a gla
 2. **Score.** A model reads each posting against your CV and says how sure it is that the job fits. That certainty is
    the score.
 3. **Fill.** A model drives a real Firefox on the employer's form and fills every required field from your CV and
-   answers, including the CV upload and voluntary disclosures.
+   answers, including the CV upload and voluntary disclosures. The form a site showed is kept after the first run
+   there — every field, its selector and the send control — so the next job on that host starts from that map instead of
+   reading the whole page again. On a Greenhouse form that measured **25% fewer tokens and half the time**; long page
+   readings are also cut to their first 8,000 characters, with a note saying how to read the rest.
 4. **You send.** Nothing is submitted until you select the jobs and confirm the batch. Each outcome is recorded with a
    screenshot of what the page said.
 

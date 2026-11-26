@@ -314,6 +314,10 @@ class Outcome:
     # When the watch stopped the run for going round in circles: how (repeat | judge), at which turn, and the count of each tool
     # name in its last calls. For the makers, with nothing of the person, the job or the page: see _Watch._stopped.
     stuck: dict[str, Any] | None = None
+    # The fields the filled form held, as one line each, kept for the next run on the same host: see Store.set_site_fields.
+    form_map: str = ""
+    # The control that sent that form, kept with the map so the next run need not look for it.
+    submit: str = ""
 
     @property
     def needs_mail(self) -> bool:
@@ -368,6 +372,46 @@ def _images(result: Any) -> list[dict[str, Any]]:
 
 
 PAGE = "({url: location.href, text: document.body ? document.body.innerText : ''})"
+
+# One line per field the form holds: selector, kind, its label, and whether it is required. Kept per host, so the next run on
+# a site of the same layout fills it from this instead of reading the whole page again.
+FORM_MAP = """(() => {
+  const out = []; const seen = new Set();
+  for (const el of document.querySelectorAll('input,select,textarea')) {
+    const box = el.getBoundingClientRect();
+    if (!box.width || !box.height) continue;
+    const label = (el.labels && el.labels[0] && el.labels[0].innerText) || el.getAttribute('aria-label') || el.placeholder || el.name || '';
+    const selector = el.id ? '#' + el.id : (el.name ? el.tagName.toLowerCase() + '[name="' + el.name + '"]' : '');
+    if (!selector || seen.has(selector)) continue;
+    seen.add(selector);
+    out.push(selector + ' | ' + el.tagName.toLowerCase() + (el.type ? ' ' + el.type : '') + ' | ' +
+             String(label).replace(/\\s+/g, ' ').trim().slice(0, 60) + (el.required ? ' | required' : ''));
+    if (out.length >= 60) break;
+  }
+  return out.join('\\n');
+})()"""
+
+# What one tool answer may add to the conversation. A full page of HTML is tens of thousands of characters and every later
+# request carries it again: cut here, with a line saying how to read just the part that is needed.
+TOOL_TEXT_CHARS = 8000
+
+
+def fitted(text: str) -> str:
+    """A tool's answer as the model reads it: whole when it is short, its start and a note when it is long."""
+    if len(text) <= TOOL_TEXT_CHARS:
+        return text
+    return (text[:TOOL_TEXT_CHARS]
+            + f"\n[{len(text) - TOOL_TEXT_CHARS:,} more characters were cut to keep this conversation short. "
+              "Read one part of the page with browser_read_text(selector) when you need it.]")
+
+
+async def form_map_of(session: Browser) -> str:
+    """The fields the open form holds, as lines; empty when the page cannot be read."""
+    try:
+        result = await session.call_tool("browser_evaluate", {"expression": FORM_MAP})
+    except Exception:  # noqa: BLE001  a map that cannot be taken is no map, and the next run reads the page as before
+        return ""
+    return "" if result.isError else tool_text(result)
 
 
 async def _page(session: Browser) -> dict[str, str] | None:
@@ -586,8 +630,9 @@ async def fill_form(session: Browser, tools: list[dict[str, Any]], client: Async
                 return _blocked(MAIL_NOT_SIGNED_IN, MAILBOX_SIGNED_OUT, watch.turns)
             pictures = _images(result) if sends_images(client) else []
             seen += pictures
-            messages.append({"role": "tool", "tool_call_id": call.id, "content": tool_text(result) or "Done: what it shows comes next."})
-            watch.saw(name, arguments, tool_text(result), "".join(part["image_url"]["url"] for part in pictures))
+            answer = fitted(tool_text(result))
+            messages.append({"role": "tool", "tool_call_id": call.id, "content": answer or "Done: what it shows comes next."})
+            watch.saw(name, arguments, answer, "".join(part["image_url"]["url"] for part in pictures))
         _trim_readings(messages)
         why, warning = await watch.after(client, model)
         if why:
@@ -751,10 +796,11 @@ async def run_on_page(
     guidance: str = "",
     page_rules: str = "",
     account: tuple[str, str] | None = None,
+    known: tuple[str, str] | None = None,
 ) -> Outcome:
     brief = (
         f"The form: {job.apply_url}\nThe job: {job.title} at {job.company}\nThe CV file to upload: {cv_file}\n"
-        f"{_account_line(job, account)}\n\nThe CV:\n{cv_text}\n\nThe answers:\n{answers}"
+        f"{_account_line(job, account)}\n{_known_line(known)}\n\nThe CV:\n{cv_text}\n\nThe answers:\n{answers}"
     )
     trial = dry_run()
     tracing = trial or bool(os.environ.get(TRACE_ENV, "").strip())
@@ -769,12 +815,15 @@ async def run_on_page(
     if report.status != "ready" or not report.submit_selector:
         reason = "other" if report.blocked_by in ("", "none") else report.blocked_by
         return Outcome("blocked", report.summary, made_account=report.made_account, reason=reason, steps=report.steps, stuck=report.stuck)
+    # Taken before the send: the page moves on afterwards. The next run on this host starts from it.
+    form_map = await form_map_of(session)
     if trial:
         # A trial of the flow: the form is filled and the send control named, and nothing leaves for the employer.
         url, screenshot = await _where(session, shot)
         proof = Proof("", url, "", "", "", screenshot)
         summary = f"Dry run ({DRY_RUN_ENV} is set): filled, send control {report.submit_selector} found, nothing sent.\n{report.summary}"
-        return Outcome("blocked", summary, proof, made_account=report.made_account, reason=DRY_RUN, steps=report.steps)
+        return Outcome("blocked", summary, proof, made_account=report.made_account, reason=DRY_RUN, steps=report.steps,
+                       form_map=form_map, submit=report.submit_selector)
     sent = await submit_and_verify(session, client, model, report.submit_selector, report.summary, guidance, shot)
     if sent.invalid:
         # Nothing was sent, and the page says which fields it wants: the model gets one more turn on the form, then one more try.
@@ -791,7 +840,8 @@ async def run_on_page(
             reason = "other" if report.blocked_by in ("", "none") else report.blocked_by
             return replace(sent, status="blocked", summary=report.summary, reason=reason, made_account=report.made_account, steps=report.steps, invalid="", stuck=report.stuck)
         sent = await submit_and_verify(session, client, model, report.submit_selector, report.summary, guidance, shot)
-    return replace(sent, made_account=report.made_account, steps=report.steps, invalid="")
+    return replace(sent, made_account=report.made_account, steps=report.steps, invalid="",
+                   form_map=form_map or sent.form_map, submit=report.submit_selector or sent.submit)
 
 
 def getting_the_browser(answer: str) -> str:
@@ -914,6 +964,7 @@ async def apply_to_job(
     profile: Path,
     guidance: str = "",
     account: tuple[str, str] | None = None,
+    known: tuple[str, str] | None = None,
 ) -> Outcome:
     """Open the browser on the person's profile, fill the job's form and send it: the person's selection and Enter came before."""
     if (missing := missing_for_the_browser()) is not None:
@@ -931,7 +982,7 @@ async def apply_to_job(
             navigated = await session.call_tool("browser_navigate", {"url": job.apply_url})
             if navigated.isError:
                 return Outcome("blocked", f"the form did not load: {tool_text(navigated)}", reason=FORM_NOT_LOADED)
-            return await run_on_page(session, tools, client, model, job, cv_text, answers, cv_file, shot, guidance, page_rules, account)
+            return await run_on_page(session, tools, client, model, job, cv_text, answers, cv_file, shot, guidance, page_rules, account, known)
         finally:
             await session.call_tool("browser_close", {})
 
@@ -939,6 +990,24 @@ async def apply_to_job(
 def site_of(url: str) -> str:
     """The host a form lives on, as the accounts are kept: one company's Workday is not another's."""
     return (urlsplit(url).hostname or "").lower()
+
+
+def _known_line(known: tuple[str, str] | None) -> str:
+    """What the last run on this site found: the fields and the send control, short, so this run need not read the page to find
+    them. The model is told to trust a selector only while it still matches; a site that changed is read as before."""
+    if not known:
+        return "The fields of this form, from an earlier run on this site: none kept. Read the page."
+    fields, submit = known
+    note = (
+        "The fields of this form, from an earlier run on this site. Use the selector while it still matches what the page "
+        "shows, and read the page when it does not; this is a help, not a fact."
+    )
+    parts = [note]
+    if fields:
+        parts.append(fields)
+    if submit:
+        parts.append(f"The control that sent the form then: {submit}")
+    return "\n".join(parts)
 
 
 def _account_line(job: Job, account: tuple[str, str] | None) -> str:
