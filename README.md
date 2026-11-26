@@ -43,6 +43,19 @@ Rainy.exe --install    # copy to %LOCALAPPDATA%\Programs\Rainy and add shortcuts
 | **4. Fill in your details** | Salary, notice period, address, education, work history: what every form asks for |
 | **5. Fetch new jobs** | Then select and apply. Tick **trial** first to fill forms without sending |
 
+### Two people, one computer
+
+Each account is a folder, and each folder is its own search — its own CV, answers, jobs, application history and browser
+sessions. One shortcut per person starts each dashboard beside the other's:
+
+```powershell
+Rainy.exe --home "%USERPROFILE%\.aihawk"            --port 8765   # the default account
+Rainy.exe --home "%USERPROFILE%\.rainy-kavipriya"   --port 8766   # a second account
+```
+
+The header shows `account: .rainy-kavipriya` so you can tell them apart at a glance. Without `--home`, Rainy uses
+`%USERPROFILE%\.aihawk`, or the folder named by `AIHAWK_HOME`.
+
 ---
 
 ## What it does
