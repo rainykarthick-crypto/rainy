@@ -231,6 +231,10 @@ def dry_run() -> bool:
 
 
 def default_home() -> Path:
+    """The folder this account keeps: AIHAWK_HOME when it is set, which is how two people share one computer."""
+    override = os.environ.get("AIHAWK_HOME", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
     return Path.home() / ".aihawk"
 
 

@@ -179,7 +179,9 @@ async def install_resume(client: AsyncOpenAI, config: Config, path: Path, store:
     kept = config.data_dir / "cvs"
     kept.mkdir(parents=True, exist_ok=True)
     for old in kept.glob("original-cv.*"):
-        old.unlink()
+        # The file being installed can be the stored one already: deleting it first would delete its own source.
+        if old.resolve() != path.resolve():
+            old.unlink()
     shutil.copyfile(path, kept / f"original-cv{path.suffix.lower()}")
     # What the person called it, which the settings say: the copy above has a name of its own.
     (kept / CV_NAME_FILE).write_text(path.name, encoding="utf-8")

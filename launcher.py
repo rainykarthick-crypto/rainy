@@ -46,20 +46,37 @@ def install() -> None:
         print(f"  shortcut: {link}")
 
 
+def take(argv: list[str], flag: str) -> tuple[str | None, list[str]]:
+    """One option and the value after it, taken out of the arguments wherever they stand."""
+    if flag not in argv:
+        return None, argv
+    at = argv.index(flag)
+    value = argv[at + 1] if at + 1 < len(argv) else None
+    return value, argv[:at] + argv[at + 2:]
+
+
 def run() -> None:
-    if sys.argv[1:2] == ["--install"]:
+    argv = sys.argv[1:]
+    if argv[:1] == ["--install"]:
         install()
         return
-    if sys.argv[1:2] == ["--invisible-mcp"]:
+    if argv[:1] == ["--invisible-mcp"]:
         from invisible_playwright_mcp.cli import main as mcp_main
 
         sys.argv = [sys.argv[0]]
         mcp_main()
         return
-    if sys.argv[1:2] == ["--tui"]:
+    # One account per folder and its own port: two people can share one computer with one shortcut each.
+    home, argv = take(argv, "--home")
+    port, argv = take(argv, "--port")
+    if home:
+        os.environ["AIHAWK_HOME"] = home
+    if port:
+        os.environ["AIHAWK_PORT"] = port
+    if argv[:1] == ["--tui"]:
         from aihawk.cli import run as tui
 
-        sys.argv = [sys.argv[0], *sys.argv[2:]]
+        sys.argv = [sys.argv[0], *argv[1:]]
         tui()
         return
     import threading
@@ -68,22 +85,24 @@ def run() -> None:
     import webbrowser
 
     import uvicorn
-    from dashboard import app
+    from dashboard import PORT, app
+
+    url = f"http://127.0.0.1:{PORT}"
 
     def open_browser_when_ready() -> None:
         """The page opened once it answers, so a shortcut feels like the app it starts."""
         for _ in range(90):
             try:
-                urllib.request.urlopen("http://127.0.0.1:8765/", timeout=1)
+                urllib.request.urlopen(url + "/", timeout=1)
             except Exception:  # noqa: BLE001  not up yet
                 time.sleep(1)
                 continue
-            webbrowser.open("http://127.0.0.1:8765")
+            webbrowser.open(url)
             return
 
-    print("Rainy dashboard on http://127.0.0.1:8765")
+    print(f"Rainy dashboard on {url}  ({os.environ.get('AIHAWK_HOME') or 'default account'})")
     threading.Thread(target=open_browser_when_ready, daemon=True).start()
-    uvicorn.run(app, host="127.0.0.1", port=8765, log_level="warning")
+    uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="warning")
 
 
 if __name__ == "__main__":

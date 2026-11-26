@@ -23,7 +23,7 @@ from starlette.routing import Route
 from aihawk.config import default_home
 from aihawk.store import SUBMITTED, Store
 
-PORT = 8765
+PORT = int(os.environ.get("AIHAWK_PORT", "8765"))
 DB = default_home() / "data" / "jobs.db"
 
 # One batch at a time: the browser is one, and so is the person watching it.
@@ -41,10 +41,18 @@ TASK: asyncio.Task[None] | None = None
 
 
 def query(sql: str, parameters: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-    connection = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    """Rows from this account's store; none at all before the account has one, which a new account has not."""
+    if not DB.is_file():
+        return []
+    try:
+        connection = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return []
     connection.row_factory = sqlite3.Row
     try:
         return [dict(row) for row in connection.execute(sql, parameters)]
+    except sqlite3.Error:
+        return []
     finally:
         connection.close()
 
@@ -184,10 +192,11 @@ async def index(request):
 async def api_stats(request):
     rows = query("select status, count(*) as n from jobs group by status")
     counts = {row["status"]: row["n"] for row in rows}
-    scores = query(
+    found = query(
         "select sum(case when score >= 4 then 1 else 0 end) as s4, sum(case when score >= 3 then 1 else 0 end) as s3,"
         " count(*) as all_scored from jobs where score is not null"
-    )[0]
+    )
+    scores = found[0] if found else {"s4": 0, "s3": 0, "all_scored": 0}
     return JSONResponse({
         "counts": counts,
         "scored": scores["all_scored"] or 0,
@@ -196,6 +205,7 @@ async def api_stats(request):
         "terminal_open": terminal_app_open(),
         "busy": browser_busy(),
         "running": STATE["running"],
+        "account": default_home().name or str(default_home()),
     })
 
 
@@ -608,6 +618,7 @@ PAGE = """<!doctype html>
 <body>
 <header>
   <h1>Rainy</h1>
+  <span class="muted" id="account"></span>
   <div class="stat">Jobs <b id="s-jobs">–</b></div>
   <div class="stat">Scored <b id="s-scored">–</b></div>
   <div class="stat">≥4.0 <b id="s-band4">–</b></div>
@@ -703,6 +714,7 @@ async function loadStats(){
   $('s-sub').textContent = money(s.counts.submitted || 0);
   $('s-blocked').textContent = money(s.counts.blocked || 0);
   $('s-terminal').textContent = s.busy ? '⚠ browser in use — applying is locked until it is free' : '';
+  if (s.account && $('account')) $('account').textContent = '· account: ' + s.account;
 }
 
 async function loadJobs(){
