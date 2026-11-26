@@ -21,7 +21,7 @@ from aihawk.config import Config, ConfigError, load_config
 from aihawk.database import Job, load_manifest, search
 from aihawk.library import Library
 from aihawk.liveness import posting_is_closed
-from aihawk.llm import ACCOUNT_CAUSES, SPEND, Mark, cause, make_client, no_credit, not_answering, refused
+from aihawk.llm import ACCOUNT_CAUSES, SPEND, Mark, account_problem, cause, make_client, no_credit, not_answering, refused
 from aihawk.plugins import Plugin, always_plugins, load_plugins, plugin_for
 from aihawk.profile import CV_NAME_FILE, ensure_account_password, import_answers_file, install_resume, save_setting
 from aihawk.scoring import NOT_JUDGED, NotAnswering, fits, question, score
@@ -271,12 +271,12 @@ class Session:
         name = self.config.data_dir / "cvs" / CV_NAME_FILE
         return name.read_text(encoding="utf-8").strip() if name.is_file() else ""
 
-    async def _resume_for(self, job: Job, cv: str, log: Log) -> tuple[Path, str]:
-        """The CV this application sends: rewritten for the posting where that helps, the person's own file where it does
-        not. A rewrite that fails sends the CV as it is — it must never stop an application."""
+    async def _resume_for(self, job: Job, cv: str) -> tuple[Path, str, str]:
+        """The CV this application sends, the text the model fills from, and one line about it for the application's own
+        summary. A rewrite that fails sends the CV as it is: it must never stop an application."""
         own = self._own_cv()
         if self.config.tailor_resume == "off":
-            return own, cv
+            return own, cv, ""
         from aihawk.resume import cache_path, render_pdf, slug_of, tailored_for
 
         posting = f"{job.title} at {job.company}. {job.location}\n\n{job.description}"
@@ -284,23 +284,22 @@ class Session:
         try:
             rewritten, reason = await tailored_for(
                 self.client, self.config.quick_model, cv, posting, job.id, folder, self.config.tailor_resume)
-        except Exception as error:  # noqa: BLE001  the CV as it is, is better than no application
-            log(f"the CV stays as it is: the rewrite failed ({type(error).__name__})")
-            return own, cv
+        except Exception as error:
+            if refused(error) or account_problem(error):
+                # Not this rewrite's fault: no credit or a key refused is the run's problem, said as itself.
+                raise
+            # Silently: a rewrite is a help, and a help that did not answer is not news on the application itself.
+            return own, cv, ""
         if not rewritten:
-            if reason:
-                log(f"the CV goes as it is: {reason}")
-            return own, cv
+            return own, cv, ""
         out = folder / slug_of(job.id) / own.name
         try:
             out.parent.mkdir(parents=True, exist_ok=True)
             render_pdf(rewritten, out, title=own.stem)
         except Exception as error:  # noqa: BLE001
-            log(f"the CV stays as it is: the rewritten one would not render ({type(error).__name__})")
             cache_path(folder, job.id).unlink(missing_ok=True)
-            return own, cv
-        log(f"the CV is rewritten for this posting: {reason or 'closer to what it asks for'}")
-        return out, rewritten
+            return own, cv, f"The CV went as it is: the rewritten one would not render ({type(error).__name__})."
+        return out, rewritten, f"The CV was rewritten for this posting: {reason or 'closer to what it asks for'}."
 
     def _own_cv(self) -> Path:
         """The person's CV as they gave it, under their own file's name, which is what the employer receives."""
@@ -358,9 +357,10 @@ class Session:
         told = NOTE.set(note)
         # Counted before the wait for the engine, so that the engine is either already coming (waited for) or not started.
         self.browsers += 1
+        resume_note = ""
         try:
             await self.engine_coming(note)
-            cv_file, cv = await self._resume_for(job, cv, log)
+            cv_file, cv, resume_note = await self._resume_for(job, cv)
             outcome = await apply_to_job(
                 self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile,
                 guidance, account, self.store.site_fields(host) or self._same_kind(host))
@@ -372,6 +372,9 @@ class Session:
         finally:
             self.browsers -= 1
             NOTE.reset(told)
+        if resume_note:
+            # Said with the application itself, on the screen and in the record, not in the log line the screen rewrites.
+            outcome = replace(outcome, summary=f"{resume_note}\n{outcome.summary}")
         used = await self._record(item, host, outcome, mark)
         return self._ended(item, host, outcome, used, started, plugin, log)
 

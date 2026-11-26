@@ -79,7 +79,9 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("ORCAROUTER_API_KEY", "test-key")
     folder = tmp_path / "home"
     folder.mkdir()
-    (folder / "aihawk.yaml").write_text(f"database: {published(tmp_path)}\n", encoding="utf-8")
+    # The scripted runs answer one call after another, so the CV rewrite — a call of its own — is off here; it has its own
+    # tests in test_resume.py.
+    (folder / "aihawk.yaml").write_text(f"database: {published(tmp_path)}\ntailor_resume: off\n", encoding="utf-8")
     # A home where a mailbox is already set up, so the start does not ask about it: the question has its own tests.
     store = Store(folder / "data" / "jobs.db")
     store.set_answer("mail_provider", "gmail")
