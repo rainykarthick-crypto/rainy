@@ -750,14 +750,21 @@ async function loadKey(){
 
 $('keysave').onclick = async () => {
   const key = $('keyinput').value.trim();
-  if (!key) return;
-  $('keysave').disabled = true; $('keysave').textContent = 'Checking…';
-  const r = await fetch('/api/key', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({key})});
-  const d = await r.json();
-  $('keysave').disabled = false; $('keysave').textContent = 'Save';
-  if (!r.ok) { alert(d.error || 'could not save that key'); return; }
-  $('keyinput').value = '';
-  loadKey();
+  if (!key) { alert('Paste a key first.'); return; }
+  const button = $('keysave');
+  button.disabled = true; button.textContent = 'Checking…';
+  try {
+    const r = await fetch('/api/key', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({key})});
+    const d = await r.json();
+    if (!r.ok) { alert(d.error || 'could not save that key'); return; }
+    $('keyinput').value = '';
+    loadKey();
+  } catch (error) {
+    // A dead server or a dropped connection left this button saying "Checking…" forever before; it always recovers now.
+    alert('Could not reach the dashboard. Is Rainy still running?');
+  } finally {
+    button.disabled = false; button.textContent = 'Save';
+  }
 };
 
 async function loadResume(){
