@@ -691,20 +691,50 @@ async def api_update(request):
     if os.environ.get("AIHAWK_PORT"):
         arguments += f' --port {os.environ["AIHAWK_PORT"]}'
     script = exe.with_name("update.cmd")
+    log = exe.with_name("update.log")
+    log.unlink(missing_ok=True)
+    # The first line is a witness: it says the helper is really running. Where a program cannot start one that outlives
+    # it — a sandbox, a job object — this file stays as it is and the person is told how to finish by hand instead.
+    # No parentheses in the retry block: inside them `goto` and `&` are read differently. `ping` is the wait, because
+    # `timeout` wants a console. It always ends by starting something: the new file, or the one that was there.
     script.write_text(
         "@echo off\r\n"
-        "timeout /t 3 /nobreak >nul\r\n"
-        ":again\r\n"
-        f'move /y "{fresh}" "{exe}" >nul 2>&1\r\n'
-        "if errorlevel 1 (timeout /t 2 /nobreak >nul & goto again)\r\n"
-        f'start "" "{exe}"{arguments}\r\n',
+        f'set "T={exe}"\r\n'
+        f'set "N={fresh}"\r\n'
+        f'set "LOG={log}"\r\n'
+        'echo started> "%LOG%"\r\n'
+        "set /a tries=0\r\n"
+        ':wait\r\n'
+        'ping -n 2 127.0.0.1 >nul\r\n'
+        'move /y "%N%" "%T%" >nul 2>&1\r\n'
+        'if not exist "%N%" goto launch\r\n'
+        "set /a tries+=1\r\n"
+        'echo still locked, try %tries%>> "%LOG%"\r\n'
+        "if %tries% GEQ 90 goto launch\r\n"
+        "goto wait\r\n"
+        ":launch\r\n"
+        'echo launching>> "%LOG%"\r\n'
+        f'start "" "%T%"{arguments}\r\n',
         encoding="utf-8",
     )
-    await asyncio.to_thread(
-        subprocess.Popen, ["cmd", "/c", str(script)],
-        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
-    )
-    threading.Timer(2.0, os._exit, args=(0,)).start()
+    try:
+        await asyncio.to_thread(
+            subprocess.Popen, ["cmd.exe", "/c", str(script)],
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except OSError as error:
+        return JSONResponse({"downloaded": str(fresh), "note": f"the helper could not start ({error})"}, status_code=502)
+
+    await asyncio.sleep(2.5)
+    started = log.exists() and "started" in log.read_text(encoding="utf-8", errors="replace")
+    if not started:
+        # Nothing was swapped and nothing is at risk: the new file stays beside the old one, and the person runs it.
+        return JSONResponse({
+            "downloaded": str(fresh),
+            "note": "Rainy could not restart itself here. Close Rainy, then run the downloaded file once; it replaces the "
+                    "installed copy and starts the new version.",
+        })
+    threading.Timer(1.0, os._exit, args=(0,)).start()
     return JSONResponse({"updating": True, "latest": release["latest"]})
 
 
@@ -1038,8 +1068,14 @@ $('doupdate').onclick = async () => {
   button.disabled = true; button.textContent = 'Downloading…';
   const r = await fetch('/api/update', {method: 'POST'});
   const d = await r.json();
-  if (!r.ok) {
-    alert(d.error || 'the update did not start');
+  if (d.error) {
+    alert(d.error);
+    button.disabled = false; button.textContent = 'Update and restart';
+    return;
+  }
+  if (d.downloaded) {
+    // The swap could not run itself here; the new file is beside the old one and finishes the job when run.
+    $('version').textContent = `${d.note} ${d.downloaded}`;
     button.disabled = false; button.textContent = 'Update and restart';
     return;
   }
