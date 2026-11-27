@@ -45,9 +45,12 @@ CLOSED_WORDS = "This posting is closed: it was not opened."
 BALANCE_PATH = "/tools/balance"
 
 class Session:
-    def __init__(self, workspace: Path) -> None:
+    def __init__(self, workspace: Path, profile: Path | None = None) -> None:
         self.workspace = workspace
         self.config = load_config(workspace)
+        # The browser's profile: one per application at a time, and a copy of its own when several run at once — Firefox
+        # locks a profile, so two windows cannot share one.
+        self.browser_profile = profile or self.config.browser_profile
         # How much one tool answer may add to a conversation, this run: the settings choose it, Economy to Quality.
         apply_module.TOOL_TEXT_CHARS = self.config.tool_text_chars
         self.plugins: tuple[Plugin, ...] = load_plugins(workspace)
@@ -197,7 +200,7 @@ class Session:
         self.browsers += 1
         try:
             await self.engine_coming(NOTE.get())
-            where = await sign_in_browser(self.config.browser_profile, self.config.data_dir / "browser", wait, url)
+            where = await sign_in_browser(self.browser_profile, self.config.data_dir / "browser", wait, url)
         finally:
             self.browsers -= 1
         return signed_in(provider, where)
@@ -362,7 +365,7 @@ class Session:
             await self.engine_coming(note)
             cv_file, cv, resume_note = await self._resume_for(job, cv)
             outcome = await apply_to_job(
-                self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.config.browser_profile,
+                self.client, self.config.model, job, cv, answers, cv_file, self.config.data_dir, self.browser_profile,
                 guidance, account, self.store.site_fields(host) or self._same_kind(host))
         except Exception as error:
             # One job's failure is reported and recorded; the next job still runs.

@@ -6,6 +6,7 @@ import csv
 import os
 import re
 import sqlite3
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -160,23 +161,30 @@ def inert(cell: str) -> str:
     return "'" + cell if cell.startswith(FORMULA_START) else cell
 
 
+# One writer at a time: several applications can end at once, and two would write the same temporary file.
+_WRITE_LOCK = threading.Lock()
+
+
 def write_applied(path: Path, sent: list[Sent]) -> None:
     """applied.csv, written whole beside itself and renamed over the old one, so it is never half written."""
-    temp = path.with_name(path.name + ".tmp")
-    with temp.open("w", newline="", encoding="utf-8-sig") as out:
-        writer = csv.writer(out)
-        writer.writerow(COLUMNS)
-        for item in sent:
-            cells = (item.when, item.job.company, item.job.title, sent_word(item), said(item), item.job.url, item.proof.url, item.proof.screenshot, item.note, item.proof.text)
-            writer.writerow(inert(cell) for cell in cells)
-    os.replace(temp, path)
+    with _WRITE_LOCK:
+        temp = path.with_name(path.name + ".tmp")
+        with temp.open("w", newline="", encoding="utf-8-sig") as out:
+            writer = csv.writer(out)
+            writer.writerow(COLUMNS)
+            for item in sent:
+                cells = (item.when, item.job.company, item.job.title, sent_word(item), said(item), item.job.url, item.proof.url, item.proof.screenshot, item.note, item.proof.text)
+                writer.writerow(inert(cell) for cell in cells)
+        os.replace(temp, path)
 
 
 class Store:
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._key_file = path.with_name("secret.key")
-        self._db = sqlite3.connect(path)
+        self._db = sqlite3.connect(path, timeout=10)
+        # Several applications can be sent at once, each recording its own: a write waits for the other rather than failing.
+        self._db.execute("PRAGMA busy_timeout = 10000")
         self._db.row_factory = sqlite3.Row
         self._db.execute(SCHEMA)
         self._db.execute(ANSWERS_SCHEMA)

@@ -20,7 +20,7 @@ from starlette.applications import Starlette
 from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Route
 
-from aihawk.config import default_home
+from aihawk.config import default_home, load_config
 from aihawk.store import SUBMITTED, Store
 
 PORT = int(os.environ.get("AIHAWK_PORT", "8765"))
@@ -36,6 +36,7 @@ STATE: dict[str, Any] = {
     "log": [],
     "results": [],
     "started": "",
+    "workers": [],
 }
 TASK: asyncio.Task[None] | None = None
 
@@ -125,58 +126,109 @@ async def refresh_jobs() -> None:
         REFRESH["running"] = False
 
 
-async def apply_batch(ids: list[str], skip_duplicates: bool, trial: bool = False) -> None:
-    """Every job named, one after another, through the terminal app's own Session. A trial fills every form and sends none."""
+def worker_profile(base: Path, index: int) -> Path:
+    """A copy of the browser profile for one worker. Firefox locks a profile, so two windows running at once cannot share
+    one; a copy carries the sign-ins it had when it was taken."""
+    import shutil
+
+    target = base.with_name(f"{base.name}-{index}")
+    if not target.exists() and base.is_dir():
+        try:
+            shutil.copytree(base, target, ignore_dangling_symlinks=True)
+        except OSError:
+            target.mkdir(parents=True, exist_ok=True)
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def split_by_site(items: list[Any], workers: int) -> list[list[Any]]:
+    """The jobs dealt to the workers, a site always whole in one hand: two browsers filling forms on one site at once is
+    what an employer sees as a person applying twice."""
+    from aihawk.apply import site_of
+
+    by_site: dict[str, list[Any]] = {}
+    for item in items:
+        by_site.setdefault(site_of(item.job.apply_url or item.job.url), []).append(item)
+    groups: list[list[Any]] = [[] for _ in range(workers)]
+    for site_jobs in sorted(by_site.values(), key=len, reverse=True):
+        smallest = min(range(workers), key=lambda index: len(groups[index]))
+        groups[smallest].extend(site_jobs)
+    return groups
+
+
+async def apply_batch(ids: list[str], skip_duplicates: bool, trial: bool = False, workers: int = 1) -> None:
+    """The jobs named, sent by one worker or several at once. A trial fills every form and sends none."""
     from aihawk.llm import ACCOUNT_CAUSES
     from aihawk.session import Session
 
     if trial:
         os.environ["AIHAWK_DRY_RUN"] = "1"
-    session = Session(default_home())
+    workers = max(1, min(int(workers or 1), 3))
+    sessions: list[Session] = []
     try:
-        chosen: list[Any] = []
-        seen: set[tuple[str, str]] = set()
-        for job_id in ids:
-            item = session.store.get(job_id)
-            if item is None:
-                continue
-            if item.status in SUBMITTED:
-                log(f"skip {item.job.company}: already sent")
-                continue
-            if skip_duplicates:
-                key = (item.job.company.strip().lower(), item.job.title.strip().lower())
-                if key in seen:
-                    log(f"skip duplicate {item.job.company} | {item.job.title}")
+        base = Session(default_home())
+        try:
+            chosen: list[Any] = []
+            seen: set[tuple[str, str]] = set()
+            for job_id in ids:
+                item = base.store.get(job_id)
+                if item is None:
                     continue
-                seen.add(key)
-            chosen.append(item)
+                if item.status in SUBMITTED:
+                    log(f"skip {item.job.company}: already sent")
+                    continue
+                if skip_duplicates:
+                    key = (item.job.company.strip().lower(), item.job.title.strip().lower())
+                    if key in seen:
+                        log(f"skip duplicate {item.job.company} | {item.job.title}")
+                        continue
+                    seen.add(key)
+                chosen.append(item)
+        finally:
+            base.close()
 
+        groups = split_by_site(chosen, workers)
         STATE["total"] = len(chosen)
-        log(f"{len(chosen)} applications to send")
-        for number, item in enumerate(chosen, 1):
-            if STATE["stopping"]:
-                log("stopped by the person")
-                break
-            STATE["current"] = f"{item.job.company} — {item.job.title}"
-            STATE["done"] = number - 1
-            log(f"[{number}/{len(chosen)}] {item.job.company} | {item.job.title} ({item.job.url})")
-            try:
-                outcome = await session.apply(item, log)
-            except Exception as error:  # noqa: BLE001  one job's failure is reported and recorded; the batch goes on
-                log(f"    failed: {type(error).__name__}: {str(error)[:160]}")
-                STATE["results"].append({"job": item.job.id, "company": item.job.company, "status": "failed", "reason": str(error)[:120]})
-                continue
-            STATE["done"] = number
-            STATE["results"].append({
-                "job": item.job.id, "company": item.job.company, "title": item.job.title,
-                "status": outcome.status, "reason": outcome.reason, "summary": outcome.summary[:300],
-            })
-            log(f"    -> {outcome.status} / {outcome.reason}")
-            if outcome.reason in ACCOUNT_CAUSES:
-                log("stopped: the account or the key")
-                break
+        STATE["workers"] = [{"current": "", "done": 0, "of": len(group)} for group in groups]
+        log(f"{len(chosen)} applications to send, {sum(1 for g in groups if g)} at a time")
+        for index, group in enumerate(groups, 1):
+            if group:
+                log(f"worker {index}: {len(group)} applications")
+
+        async def run_worker(index: int, group: list[Any]) -> None:
+            session = Session(default_home(), profile=None if index == 1 else worker_profile(
+                load_config(default_home()).browser_profile, index))
+            sessions.append(session)
+            mine = STATE["workers"][index - 1]
+            for number, item in enumerate(group, 1):
+                if STATE["stopping"]:
+                    log(f"[{index}] stopped by the person")
+                    return
+                mine["current"] = f"{item.job.company} — {item.job.title}"
+                mine["done"] = number - 1
+                log(f"[{index}] [{number}/{len(group)}] {item.job.company} | {item.job.title}")
+                try:
+                    outcome = await session.apply(item, log)
+                except Exception as error:  # noqa: BLE001  one job's failure is reported; the others still run
+                    log(f"[{index}] failed: {type(error).__name__}: {str(error)[:160]}")
+                    STATE["results"].append({"job": item.job.id, "company": item.job.company, "status": "failed",
+                                             "reason": str(error)[:120]})
+                    continue
+                mine["done"] = number
+                STATE["results"].append({
+                    "job": item.job.id, "company": item.job.company, "title": item.job.title,
+                    "status": outcome.status, "reason": outcome.reason, "summary": outcome.summary[:300],
+                })
+                log(f"[{index}] -> {outcome.status} / {outcome.reason}")
+                if outcome.reason in ACCOUNT_CAUSES:
+                    log(f"[{index}] stopped: the account or the key")
+                    STATE["stopping"] = True
+                    return
+
+        await asyncio.gather(*(run_worker(index, group) for index, group in enumerate(groups, 1) if group))
     finally:
-        session.close()
+        for session in sessions:
+            session.close()
         if trial:
             os.environ.pop("AIHAWK_DRY_RUN", None)
         STATE["running"] = False
@@ -437,9 +489,10 @@ async def api_apply(request):
         return JSONResponse({"error": "no jobs selected"}, status_code=400)
     skip_duplicates = bool(body.get("skip_duplicates", True))
     trial = bool(body.get("trial", False))
+    workers = max(1, min(int(body.get("workers") or 1), 3))
     STATE.update({"running": True, "stopping": False, "total": 0, "done": 0, "current": "", "log": [], "results": [],
-                  "started": datetime.now().strftime("%H:%M:%S"), "trial": trial})
-    TASK = asyncio.create_task(apply_batch(ids, skip_duplicates, trial))
+                  "started": datetime.now().strftime("%H:%M:%S"), "trial": trial, "workers": []})
+    TASK = asyncio.create_task(apply_batch(ids, skip_duplicates, trial, workers))
     return JSONResponse({"started": len(ids)})
 
 
@@ -865,6 +918,8 @@ PAGE = """<!doctype html>
       <button id="apply" class="primary">Apply selected</button>
       <button id="stop" class="danger">Stop</button>
       <label class="muted" title="fill every form, send none"><input type="checkbox" id="trial"> trial</label>
+      <label class="muted" title="How many applications are sent at once: one browser per worker, a site always in one hand">
+        at once <select id="workers"><option>1</option><option>2</option><option>3</option></select></label>
       <span class="muted" id="selcount">0 selected</span>
     </div>
     <table>
@@ -1003,9 +1058,15 @@ function showCount(){ $('selcount').textContent = selected.size + ' selected'; }
 
 async function loadProgress(){
   const p = await (await fetch('/api/progress')).json();
-  $('progress').textContent = p.running
-    ? `sending ${p.done}/${p.total} — ${p.current || 'starting'}`
-    : (p.results.length ? `last batch: ${p.results.length} jobs` : 'idle');
+  const busy = (p.workers || []).filter(w => w.of);
+  if (p.running && busy.length > 1) {
+    $('progress').innerHTML = busy.map((w, i) =>
+      `worker ${i + 1}: ${w.done}/${w.of} ${escapeHtml(w.current || '')}`).join('<br>');
+  } else {
+    $('progress').textContent = p.running
+      ? `sending ${p.done}/${p.total} — ${p.current || 'starting'}`
+      : (p.results.length ? `last batch: ${p.results.length} jobs` : 'idle');
+  }
   $('pfill').style.width = p.total ? (100 * p.done / p.total) + '%' : '0';
   $('log').textContent = (p.log || []).slice(-120).join('\\n');
   $('log').scrollTop = $('log').scrollHeight;
@@ -1223,7 +1284,8 @@ $('apply').onclick = async () => {
   if (!selected.size) { alert('Select jobs first.'); return; }
   if (!confirm(`Send ${selected.size} application(s) for real? They go to the employers in your name.`)) return;
   const r = await fetch('/api/apply', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ids: [...selected], skip_duplicates: true, trial: $('trial').checked})});
+    body: JSON.stringify({ids: [...selected], skip_duplicates: true, trial: $('trial').checked,
+                          workers: Number($('workers').value || 1)})});
   const data = await r.json();
   if (!r.ok) { alert(data.error || 'could not start'); return; }
   selected.clear(); showCount();

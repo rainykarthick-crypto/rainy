@@ -64,6 +64,7 @@ The header shows `account: .rainy-kavipriya` so you can tell them apart at a gla
 |---|---|
 | **Scored job list** | Every posting ranked 1–5 against your CV, filtered by score, status and text |
 | **Batch apply** | Select a page, apply, watch each step live, stop between applications |
+| **Several at once** | One, two or three applications in parallel — one browser each, and a site is always kept in one hand so an employer never sees two forms arriving together |
 | **Trial mode** | Fills every required field and stops at the send button |
 | **Resume upload** | PDF, Word or text; the search is rebuilt from your CV |
 | **Editable answers** | Every detail the forms receive, changed in place, used by the next application |
