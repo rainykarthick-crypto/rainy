@@ -454,7 +454,7 @@ EARLIER_READING = "\n[An earlier reading, cut to its start to keep this conversa
 # How many tool answers stay whole. Every earlier one is cut to its first line: the model still reads what it did and what
 # came back, without the whole page being sent again on each of the forty steps that follow. The latest answers — the field
 # it is filling now — are never touched.
-KEEP_WHOLE = 6
+KEEP_WHOLE = 4
 ONE_LINE_CHARS = 160
 
 
@@ -1017,8 +1017,10 @@ def _known_line(known: tuple[str, str] | None) -> str:
         return "The fields of this form, from an earlier run on this site: none kept. Read the page."
     fields, submit = known
     note = (
-        "The fields of this form, from an earlier run on this site. Use the selector while it still matches what the page "
-        "shows, and read the page when it does not; this is a help, not a fact."
+        "The fields of this form, from an earlier run on this site. Type into a selector here straight away: a type that "
+        "fails says so. Read the page, or take a picture of it, only when a selector fails or the page is not this form — "
+        "reading it first, every time, is most of what an application costs. The map is a help, not a fact: never type "
+        "something the CV or the answers do not support just because a field is listed."
     )
     parts = [note]
     if fields:

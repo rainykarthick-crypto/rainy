@@ -1032,6 +1032,9 @@ def test_old_large_readings_are_cut_to_their_start_in_one_batch_and_the_latest_s
 
 def test_the_history_changes_once_per_batch_and_never_under_the_latest_readings_alone(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(apply_module, "TRIM_READINGS", True)
+    # This is the trimming of large readings, one cut per batch: the compaction of old answers is its own test, and would
+    # count as a second change here.
+    monkeypatch.setattr(apply_module, "compact", lambda *_args, **_keywords: None)
     # The service reuses what is the same as the request before: a request whose earlier messages changed costs the whole again.
     def changes(reads: int) -> int:
         model = fill_with_readings([read_page()] * reads)
